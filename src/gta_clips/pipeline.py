@@ -51,7 +51,7 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
 
 def ingest(config: Config) -> int:
     if not config.twitch.streamers:
-        logging.info("Add Twitch channel logins to twitch.streamers to discover archives")
+        logging.info('Set twitch.streamers to channel logins or ["*"] to discover archives')
         return 0
     failures = 0
     with worker_lock(config.paths.data_dir, "ingest"):

@@ -7,9 +7,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 import unittest
 
-from gta_clips.config import HighlightsConfig, PathsConfig, ScheduleConfig, load_config
+from gta_clips.config import ConfigError, HighlightsConfig, PathsConfig, ScheduleConfig, load_config
 from gta_clips.db import connect
-from gta_clips.discovery import PopularClip, Vod
+from gta_clips.discovery import PopularClip, Twitch, Vod
 from gta_clips.highlights import rank_moments
 from gta_clips.metadata import attribution
 from gta_clips.pipeline import ingest
@@ -103,6 +103,30 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(ingest(self.config), 0)
             self.assertEqual(ingest(self.config), 0)
             process.assert_called_once()
+
+    def test_all_streamers_uses_category_archives_without_channel_filter(self):
+        path = self.config.paths.data_dir / "wildcard.toml"
+        path.write_text('[twitch]\nstreamers = ["*"]\n', encoding="utf-8")
+        wildcard = load_config(path).twitch
+        now = datetime.now(timezone.utc).isoformat()
+        archives = [
+            {"id": str(index), "user_id": str(index), "user_login": login,
+             "created_at": now, "duration": "1m"}
+            for index, login in enumerate(("streamer", "another_streamer"), start=1)
+        ]
+        with patch.dict("os.environ", {"TWITCH_CLIENT_ID": "test", "TWITCH_CLIENT_SECRET": "test"}):
+            twitch = Twitch()
+        with patch.object(twitch, "get", return_value={
+                "data": [{"id": "category-id", "name": wildcard.game_name}],
+        }), patch.object(twitch, "pages", return_value=archives) as pages:
+            self.assertEqual([vod.streamer for vod in twitch.discover(wildcard)],
+                             ["streamer", "another_streamer"])
+            self.assertEqual([vod.streamer for vod in twitch.discover(self.config.twitch)],
+                             ["streamer"])
+            self.assertEqual(pages.call_args.args[1]["game_id"], "category-id")
+        path.write_text('[twitch]\nstreamers = ["*", "streamer"]\n', encoding="utf-8")
+        with self.assertRaises(ConfigError):
+            load_config(path)
 
     def test_highlights_clamp_to_vod_and_do_not_overlap(self):
         settings = HighlightsConfig(clips_per_vod=3, duration_seconds=15, lead_in_seconds=3)

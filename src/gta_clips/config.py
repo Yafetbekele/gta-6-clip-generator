@@ -28,6 +28,10 @@ class TwitchConfig:
     lookback_days: int = 7
     clips_per_vod: int = 10
 
+    @property
+    def all_streamers(self) -> bool:
+        return self.streamers == ("*",)
+
 
 @dataclass(frozen=True)
 class HighlightsConfig:
@@ -128,9 +132,14 @@ def _twitch(raw: object) -> TwitchConfig:
     logins = options.get("streamers", [])
     if not isinstance(logins, list):
         raise ConfigError("twitch.streamers must be an array of Twitch logins")
+    if "*" in logins and logins != ["*"]:
+        raise ConfigError('Use twitch.streamers = ["*"] by itself to discover all channels')
+    streamers = ("*",) if logins == ["*"] else tuple(
+        dict.fromkeys(_login(login, "twitch.streamers") for login in logins)
+    )
     return TwitchConfig(
         game_name=_text(options.get("game_name", "Grand Theft Auto VI"), "twitch.game_name"),
-        streamers=tuple(dict.fromkeys(_login(login, "twitch.streamers") for login in logins)),
+        streamers=streamers,
         lookback_days=_integer(options.get("lookback_days", 7), "twitch.lookback_days", 1),
         clips_per_vod=_integer(options.get("clips_per_vod", 10), "twitch.clips_per_vod", 1),
     )

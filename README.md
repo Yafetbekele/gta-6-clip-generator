@@ -1,6 +1,6 @@
 # GTA 6 Clip Generator
 
-A Python CLI that turns Twitch archives from your allowlist into reviewed, captioned vertical clips. YouTube Shorts and Instagram Reels can publish on a schedule after approval. The TikTok adapter sends approved drafts to your inbox for you to finish in TikTok, subject to app access and TikTok’s content rules.
+A Python CLI that turns Twitch archives into reviewed, captioned vertical clips. YouTube Shorts and Instagram Reels can publish on a schedule after approval. The TikTok adapter sends approved drafts to your inbox for you to finish in TikTok, subject to app access and TikTok’s content rules.
 
 ## Install on Windows
 
@@ -15,7 +15,7 @@ A Python CLI that turns Twitch archives from your allowlist into reviewed, capti
    .\.venv\Scripts\gta-clips.exe check-config
    ```
 
-3. Put the Twitch logins of streamers whose footage you can republish in `twitch.streamers`. Set the destination limits in `config.toml` when you’re ready. A limit of zero disables that destination. The schedule counts days in the machine’s local time zone.
+3. Put specific Twitch logins in `twitch.streamers` or set `streamers = ["*"]` to discover archives from all channels in the selected category. Verify reposting permission when you review clips. Set the destination limits in `config.toml` when you’re ready. A limit of zero disables that destination. The schedule counts days in the machine’s local time zone.
 4. Create an app in the [Twitch Developer Console](https://dev.twitch.tv/console/apps), generate its client secret, and set `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` in `.env`. The program exchanges them for a Twitch app token.
 
 On macOS or Linux, use `.venv/bin/python` and `.venv/bin/gta-clips`, and use `cp` for the example files. The commands below assume the virtual environment is active or its script directory is on your PATH.

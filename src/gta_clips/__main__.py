@@ -68,7 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=Path("config.toml"), help="TOML settings file")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check-config", help="Validate settings and show the configured targets")
-    commands.add_parser("ingest", help="Create clips from recent completed allowlisted VODs")
+    commands.add_parser("ingest", help="Create clips from recent completed Twitch VODs")
     commands.add_parser("publish", help="Send approved clips when their schedule permits")
     auth = commands.add_parser("auth", help="Authorize a social account through its official OAuth flow")
     auth.add_argument("platform", choices=PLATFORMS)
@@ -86,7 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "check-config":
         destinations = [platform for platform, settings in config.schedule.items() if settings.daily_limit]
         print(f"Configuration is valid for {config.twitch.game_name}.")
-        print(f"Allowlisted streamers: {', '.join(config.twitch.streamers) or 'none configured'}")
+        streamers = ("all channels in this category" if config.twitch.all_streamers
+                     else ", ".join(config.twitch.streamers) or "none configured")
+        print(f"Twitch discovery: {streamers}")
         print(f"Storage: {config.paths.data_dir}")
         print(f"Enabled posting destinations: {', '.join(destinations) or 'none'}")
         return 0

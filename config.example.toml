@@ -3,6 +3,7 @@ data_dir = "data"
 
 [twitch]
 game_name = "Grand Theft Auto VI"
+# Use ["*"] to discover recent category archives from any streamer.
 streamers = []
 lookback_days = 7
 clips_per_vod = 10

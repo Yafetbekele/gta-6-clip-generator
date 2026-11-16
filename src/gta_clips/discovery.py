@@ -113,7 +113,7 @@ class Twitch:
             if created < cutoff:
                 break
             login = item["user_login"].lower()
-            if login not in allowlist or not item["id"].isdecimal():
+            if not item["id"].isdecimal() or (not config.all_streamers and login not in allowlist):
                 continue
             duration = _duration(item["duration"])
             if duration:
