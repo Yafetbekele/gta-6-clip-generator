@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gta-6-clip-generator"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Create and review short-form clips from Twitch VODs."
+
+[project.scripts]
+gta-clips = "gta_clips.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
