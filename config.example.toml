@@ -24,7 +24,7 @@ spike_multiplier = 3.0
 cooldown_seconds = 120
 
 [editing]
-layout = "gameplay"
+layout = "fit"
 whisper_model = "base"
 
 # To enable a split layout for a channel, replace "streamer_login" and

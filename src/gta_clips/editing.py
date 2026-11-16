@@ -50,6 +50,10 @@ def render(
     if split:
         layout = (f"[0:v]split[face_src][game_src];[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
                   f"[game_src]{_crop(split.gameplay)}{_fill(1200)}[game];[face][game]vstack")
+    elif settings.layout == "fit":
+        # Preserve every edge, with spare vertical space for captions and credit.
+        layout = ("[0:v]scale=1080:1920:force_original_aspect_ratio=decrease:"
+                  "force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
     else:
         layout = f"[0:v]{_fill(1920)}"
     filters = f"{layout},fps=30,ass=captions.ass[video]"

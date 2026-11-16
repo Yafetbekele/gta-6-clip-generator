@@ -175,9 +175,9 @@ def _highlights(raw: object) -> HighlightsConfig:
 
 def _editing(raw: object) -> EditingConfig:
     options = _table(raw, "editing", (field.name for field in fields(EditingConfig)))
-    layout = options.get("layout", "gameplay")
-    if layout not in ("gameplay", "split"):
-        raise ConfigError("editing.layout must be 'gameplay' or 'split'")
+    layout = options.get("layout", "fit")
+    if layout not in ("fit", "gameplay", "split"):
+        raise ConfigError("editing.layout must be 'fit', 'gameplay' or 'split'")
     streamers = options.get("streamers", {})
     if not isinstance(streamers, dict):
         raise ConfigError("editing.streamers must be a TOML table")
