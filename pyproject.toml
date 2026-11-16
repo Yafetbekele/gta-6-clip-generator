@@ -7,6 +7,18 @@ name = "gta-6-clip-generator"
 version = "0.1.0"
 requires-python = ">=3.11"
 description = "Create and review short-form clips from Twitch VODs."
+dependencies = [
+    "av>=11",
+    "faster-whisper>=1.1,<2",
+    "imageio-ffmpeg>=0.6,<1",
+    "numpy>=1.24",
+    "python-dotenv>=1,<2",
+    "requests>=2.32,<3",
+    "yt-dlp",
+]
+
+[project.optional-dependencies]
+instagram = ["boto3>=1.36,<2"]
 
 [project.scripts]
 gta-clips = "gta_clips.__main__:main"
