@@ -1,6 +1,7 @@
 """Authorize publishing accounts and refresh their OAuth tokens."""
 
 from base64 import urlsafe_b64encode
+from collections.abc import Callable
 from getpass import getpass
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -19,6 +20,7 @@ from .db import connect
 GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/"
 INSTAGRAM_GRAPH = "https://graph.instagram.com"
+TWITCH_TOKEN = "https://id.twitch.tv/oauth2/token"
 
 
 def env(name: str) -> str:
@@ -57,7 +59,7 @@ def _save_token(path: Path, platform: str, payload: dict, previous: dict | None 
 def _verify_callback(callback: str, redirect: str, state: str) -> dict:
     url = urlsplit(callback)
     expected = urlsplit(redirect)
-    if (url.scheme, url.netloc, url.path) != (expected.scheme, expected.netloc, expected.path):
+    if (url.scheme, url.netloc, url.path or "/") != (expected.scheme, expected.netloc, expected.path or "/"):
         raise ValueError("Callback URL does not match the registered redirect URI")
     parameters = parse_qs(url.query)
     if parameters.get("state") != [state]:
@@ -67,11 +69,10 @@ def _verify_callback(callback: str, redirect: str, state: str) -> dict:
     return parameters
 
 
-def _google_authorize(state: str) -> dict:
-    verifier = secrets.token_urlsafe(64)
-    challenge = urlsafe_b64encode(sha256(verifier.encode()).digest()).decode().rstrip("=")
-    client_id = env("YOUTUBE_CLIENT_ID")
-    secret = env("YOUTUBE_CLIENT_SECRET")
+def _loopback_code(
+    label: str, state: str, build_url: Callable[[str], str], *,
+    fixed_redirect: str | None = None,
+) -> tuple[str, str]:
     expected_redirect = ""
     received = {}
 
@@ -82,7 +83,7 @@ def _google_authorize(state: str) -> dict:
         def do_GET(self):
             try:
                 received.update(_verify_callback(
-                    f"http://127.0.0.1:{self.server.server_port}{self.path}",
+                    f"http://{self.headers.get('Host', '')}{self.path}",
                     expected_redirect, state,
                 ))
             except ValueError:
@@ -92,26 +93,56 @@ def _google_authorize(state: str) -> dict:
             self.end_headers()
             self.wfile.write(b"Authorization received. You can close this page.")
 
-    with HTTPServer(("127.0.0.1", 0), Callback) as server:
-        expected_redirect = f"http://127.0.0.1:{server.server_port}/oauth"
-        query = urlencode({
-            "client_id": client_id, "redirect_uri": expected_redirect, "response_type": "code",
-            "scope": "https://www.googleapis.com/auth/youtube.upload", "state": state,
-            "access_type": "offline", "prompt": "consent",
-            "code_challenge": challenge, "code_challenge_method": "S256",
-        })
-        url = f"https://accounts.google.com/o/oauth2/v2/auth?{query}"
-        print(f"Open this URL to authorize YouTube:\n{url}", flush=True)
+    port = urlsplit(fixed_redirect).port if fixed_redirect else 0
+    with HTTPServer(("127.0.0.1", port or 0), Callback) as server:
+        expected_redirect = fixed_redirect or f"http://127.0.0.1:{server.server_port}/oauth"
+        url = build_url(expected_redirect)
+        print(f"Open this URL to authorize {label}:\n{url}", flush=True)
         webbrowser.open(url)
         server.timeout = 1
         deadline = time.monotonic() + 180
         while not received and time.monotonic() < deadline:
             server.handle_request()
     if not received:
-        raise RuntimeError("YouTube authorization timed out")
+        raise RuntimeError(f"{label} authorization timed out")
+    return received["code"][0], expected_redirect
+
+
+def _google_authorize(state: str) -> dict:
+    verifier = secrets.token_urlsafe(64)
+    challenge = urlsafe_b64encode(sha256(verifier.encode()).digest()).decode().rstrip("=")
+    client_id = env("YOUTUBE_CLIENT_ID")
+    secret = env("YOUTUBE_CLIENT_SECRET")
+
+    def build_url(redirect: str) -> str:
+        query = urlencode({
+            "client_id": client_id, "redirect_uri": redirect, "response_type": "code",
+            "scope": "https://www.googleapis.com/auth/youtube.upload", "state": state,
+            "access_type": "offline", "prompt": "consent",
+            "code_challenge": challenge, "code_challenge_method": "S256",
+        })
+        return f"https://accounts.google.com/o/oauth2/v2/auth?{query}"
+
+    code, redirect = _loopback_code("YouTube", state, build_url)
     return _token_request(GOOGLE_TOKEN, {
-        "client_id": client_id, "client_secret": secret, "redirect_uri": expected_redirect,
-        "grant_type": "authorization_code", "code": received["code"][0], "code_verifier": verifier,
+        "client_id": client_id, "client_secret": secret, "redirect_uri": redirect,
+        "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+    })
+
+
+def _twitch_authorize(state: str) -> dict:
+    client_id = env("TWITCH_CLIENT_ID")
+    secret = env("TWITCH_CLIENT_SECRET")
+
+    def build_url(redirect: str) -> str:
+        query = urlencode({"client_id": client_id, "redirect_uri": redirect, "response_type": "code",
+                           "scope": "user:read:chat", "state": state})
+        return f"https://id.twitch.tv/oauth2/authorize?{query}"
+
+    code, redirect = _loopback_code("Twitch chat", state, build_url, fixed_redirect="http://localhost:3000")
+    return _token_request(TWITCH_TOKEN, {
+        "client_id": client_id, "client_secret": secret, "redirect_uri": redirect,
+        "grant_type": "authorization_code", "code": code,
     })
 
 
@@ -119,6 +150,8 @@ def authorize(path: Path, platform: str):
     state = secrets.token_urlsafe(32)
     if platform == "youtube":
         token = _google_authorize(state)
+    elif platform == "twitch":
+        token = _twitch_authorize(state)
     else:
         prefix = platform.upper()
         client_id = env("TIKTOK_CLIENT_KEY" if platform == "tiktok" else "INSTAGRAM_CLIENT_ID")
@@ -161,6 +194,11 @@ def access_token(path: Path, platform: str) -> tuple[str, dict]:
             new = _token_request(f"{INSTAGRAM_GRAPH}/refresh_access_token", {
                 "grant_type": "ig_refresh_token", "access_token": token["access_token"],
             }, "GET")
+        elif platform == "twitch":
+            new = _token_request(TWITCH_TOKEN, {
+                "client_id": env("TWITCH_CLIENT_ID"), "client_secret": env("TWITCH_CLIENT_SECRET"),
+                "grant_type": "refresh_token", "refresh_token": token["refresh_token"],
+            })
         else:
             tiktok = platform == "tiktok"
             prefix = "TIKTOK" if tiktok else "YOUTUBE"

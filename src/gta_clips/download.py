@@ -20,14 +20,17 @@ def ffmpeg_binary() -> str:
     return get_ffmpeg_exe()
 
 
-def download_vod(url: str, directory: Path) -> Path:
+def download_vod(url: str, directory: Path, *, section: tuple[int, int] | None = None) -> Path:
+    options = [] if section is None else [
+        "--download-sections", f"*{section[0]}-{section[1]}", "--force-keyframes-at-cuts",
+    ]
     result = subprocess.run(
         [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
          "--ffmpeg-location", ffmpeg_binary(),
          "--no-progress", "--no-warnings", "--retries", "3", "--fragment-retries", "5",
-         "-f", "best[ext=mp4]/best", "-o", str(directory / "source.%(ext)s"),
+         *options, "-f", "best[ext=mp4]/best", "-o", str(directory / "source.%(ext)s"),
          "--print", "after_move:filepath", "--", url],
-        timeout=4 * 3600, check=True, capture_output=True, text=True,
+        timeout=4 * 3600 if section is None else 180, check=True, capture_output=True, text=True,
     )
     lines = result.stdout.strip().splitlines()
     if not lines:

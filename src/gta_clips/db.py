@@ -29,7 +29,19 @@ CREATE TABLE IF NOT EXISTS uploads (
 CREATE TABLE IF NOT EXISTS oauth (
     platform TEXT PRIMARY KEY, token TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS live_bursts (
+    stream_id TEXT NOT NULL, anchor INTEGER NOT NULL,
+    broadcaster_id TEXT NOT NULL, streamer TEXT NOT NULL, game_name TEXT NOT NULL,
+    messages INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'waiting',
+    retry_at INTEGER NOT NULL, detail TEXT, clip_id TEXT REFERENCES clips(id),
+    PRIMARY KEY (stream_id, anchor)
+);
+CREATE INDEX IF NOT EXISTS live_bursts_due ON live_bursts(state, retry_at);
 """
+
+INSERT_CLIP = """INSERT INTO clips
+    (id, vod_id, streamer, path, start, duration, transcript, title, description, hashtags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 
 @contextmanager

@@ -44,6 +44,22 @@ Use an ID from `queue list`. Preview opens the MP4 in your default video player.
 
 `queue export ID DIRECTORY` copies the MP4 and a separate caption text file for manual publishing. For TikTok drafts, use the exported caption text in TikTok, since the draft API accepts video bytes and you enter the caption in the app.
 
+## Catch live chat bursts
+
+```text
+gta-clips auth twitch
+gta-clips watch-live
+```
+
+Run the authorization once and approve **read-only chat access** in Twitch. Use the same Twitch app credentials in `.env` and register `http://localhost:3000` in that app's redirect URLs. The watcher uses Twitch EventSub, sends no chat messages, and stores burst counts and timestamps locally.
+
+- With `streamers = ["*"]`, the watcher selects the most-viewed live channels in the configured category, up to `live.max_channels` (15 by default, configurable up to 20). A named allowlist restricts which live channels are eligible. The selection refreshes every 30 seconds.
+- A burst requires at least 15 messages in 10 seconds by default and at least three times the preceding two-minute baseline. Set `messages_per_10_seconds`, `spike_multiplier`, and `cooldown_seconds` under `[live]` to tune it. The default cooldown is two minutes per broadcast.
+- Each burst requests exactly 30 seconds before and 30 seconds after its recorded timestamp. The watcher waits for the public Twitch VOD to cover that full window, downloads just that section, captions it, and adds it to the normal local review queue. If there is no in-progress archive, rendering can happen after the stream ends. Unavailable windows expire after 48 hours.
+- Run `gta-clips live-status` from another terminal to see recent bursts and whether their clips are ready. Use **Ctrl+C** to stop watching. Restart the watcher or run `gta-clips render-live` to process saved windows once their VODs become available.
+
+For continuous monitoring, run `watch-live` in a terminal or configure one Windows Task Scheduler task to start it at logon and restart on failure. Use the same executable, config, and user account as the other workers. The watcher logs to `data/watch-live.log`.
+
 ## Authorize platform access
 
 ### YouTube Shorts
@@ -87,3 +103,4 @@ Keep OAuth callback URLs, credentials, tokens, media, and the SQLite database pr
 | `captions.py` and `editing.py` | Generate Whisper word timing and render vertical MP4s with captions and credit. |
 | `metadata.py` and `review.py` | Generate transcript-based suggestions and handle preview, editing, approval, rejection, and export. |
 | `oauth.py`, `upload/`, and `scheduler.py` | Authorize accounts, checkpoint official API uploads, and enforce the selected schedule. |
+| `live.py` and `live_render.py` | Count live chat bursts and render the matching 60-second VOD sections for review. |

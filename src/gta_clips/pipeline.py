@@ -7,7 +7,7 @@ import time
 
 from .captions import Transcriber
 from .config import Config
-from .db import connect, worker_lock
+from .db import INSERT_CLIP, connect, worker_lock
 from .discovery import Twitch, Vod
 from .download import download_vod, replay_chat
 from .editing import probe_duration, render
@@ -43,11 +43,7 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
             rows.append((clip_id, vod.id, vod.streamer, relative.as_posix(), moment.start,
                          moment.duration, transcript, metadata.title, metadata.description, metadata.hashtags))
         with connect(config.paths.database) as db:
-            db.executemany(
-                """INSERT INTO clips
-                   (id, vod_id, streamer, path, start, duration, transcript, title, description, hashtags)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows,
-            )
+            db.executemany(INSERT_CLIP, rows)
             db.execute("UPDATE vods SET status='done', detail=?, updated=unixepoch() WHERE id=?",
                        (f"{len(rows)} clips", vod.id))
     logging.info("Processed VOD %s and queued %s clips", vod.id, len(rows))

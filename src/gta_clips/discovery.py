@@ -99,14 +99,10 @@ class Twitch:
             cursor = next_cursor
 
     def discover(self, config: TwitchConfig):
-        games = self.get("games", {"name": config.game_name})["data"]
-        game = next((item for item in games
-                     if item["name"].casefold() == config.game_name.casefold()), None)
-        if game is None:
-            raise RuntimeError(f"Twitch category not found: {config.game_name}")
+        game_id = self.game_id(config.game_name)
         cutoff = datetime.now(timezone.utc) - timedelta(days=config.lookback_days)
         allowlist = set(config.streamers)
-        videos = self.pages("videos", {"game_id": game["id"], "type": "archive",
+        videos = self.pages("videos", {"game_id": game_id, "type": "archive",
                                      "sort": "time", "first": 100})
         for item in videos:
             created = _timestamp(item["created_at"])
@@ -118,6 +114,13 @@ class Twitch:
             duration = _duration(item["duration"])
             if duration:
                 yield Vod(item["id"], login, item["user_id"], duration, created, item.get("stream_id"))
+
+    def game_id(self, name: str) -> str:
+        games = self.get("games", {"name": name})["data"]
+        for game in games:
+            if game["name"].casefold() == name.casefold():
+                return game["id"]
+        raise RuntimeError(f"Twitch category not found: {name}")
 
     def is_live(self, vod: Vod) -> bool:
         if not vod.stream_id:

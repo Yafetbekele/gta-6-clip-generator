@@ -16,6 +16,13 @@ chat_weight = 1.0
 audio_weight = 1.0
 twitch_clips_weight = 1.0
 
+# Used by watch-live. A clip always spans 30 seconds before and after a burst.
+[live]
+max_channels = 15
+messages_per_10_seconds = 15
+spike_multiplier = 3.0
+cooldown_seconds = 120
+
 [editing]
 layout = "gameplay"
 whisper_model = "base"

@@ -71,12 +71,21 @@ class ScheduleConfig:
 
 
 @dataclass(frozen=True)
+class LiveConfig:
+    max_channels: int = 15
+    messages_per_10_seconds: int = 15
+    spike_multiplier: float = 3.0
+    cooldown_seconds: int = 120
+
+
+@dataclass(frozen=True)
 class Config:
     paths: PathsConfig
     twitch: TwitchConfig
     highlights: HighlightsConfig
     editing: EditingConfig
     schedule: dict[str, ScheduleConfig]
+    live: LiveConfig = LiveConfig()
 
 
 PLATFORMS = ("youtube", "instagram", "tiktok")
@@ -200,6 +209,23 @@ def _schedule(raw: object) -> dict[str, ScheduleConfig]:
     return schedule
 
 
+def _live(raw: object) -> LiveConfig:
+    options = _table(raw, "live", (field.name for field in fields(LiveConfig)))
+    defaults = LiveConfig()
+    multiplier = _nonnegative_number(options.get("spike_multiplier", defaults.spike_multiplier),
+                                     "live.spike_multiplier")
+    if multiplier < 1:
+        raise ConfigError("live.spike_multiplier must be at least 1")
+    return LiveConfig(
+        max_channels=_integer(options.get("max_channels", defaults.max_channels), "live.max_channels", 1, 20),
+        messages_per_10_seconds=_integer(options.get("messages_per_10_seconds", defaults.messages_per_10_seconds),
+                                         "live.messages_per_10_seconds", 1),
+        spike_multiplier=multiplier,
+        cooldown_seconds=_integer(options.get("cooldown_seconds", defaults.cooldown_seconds),
+                                  "live.cooldown_seconds", 60),
+    )
+
+
 def load_config(filename: str | Path = "config.toml") -> Config:
     """Read a config file. Relative storage paths start at the file's directory."""
     try:
@@ -208,7 +234,7 @@ def load_config(filename: str | Path = "config.toml") -> Config:
             raw = tomllib.load(file)
     except (OSError, RuntimeError, ValueError) as exc:
         raise ConfigError(f"Cannot read {filename}: {exc}") from exc
-    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule"))
+    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule", "live"))
     paths = _table(options.get("paths", {}), "paths", ("data_dir",))
     directory = _text(paths.get("data_dir", "data"), "paths.data_dir")
     try:
@@ -221,4 +247,5 @@ def load_config(filename: str | Path = "config.toml") -> Config:
         highlights=_highlights(options.get("highlights", {})),
         editing=_editing(options.get("editing", {})),
         schedule=_schedule(options.get("schedule", {})),
+        live=_live(options.get("live", {})),
     )
