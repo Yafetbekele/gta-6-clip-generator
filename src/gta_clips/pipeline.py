@@ -11,7 +11,7 @@ from .db import connect, worker_lock
 from .discovery import Twitch, Vod
 from .download import download_vod, replay_chat
 from .editing import probe_duration, render
-from .highlights import audio_levels, rank_moments
+from .highlights import audio_levels, rank_moments, video_activity
 from .metadata import generate
 
 
@@ -26,7 +26,11 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
         duration = min(vod.duration, int(probe_duration(source)))
         chat = replay_chat(vod.id, working, base / "chat-imports")
         audio = audio_levels(source)
-        moments = rank_moments(duration, chat, audio, popular, config.highlights)
+        activity = video_activity(source, duration)
+        moments = rank_moments(duration, chat, audio, popular, config.highlights,
+                               active_seconds=activity)
+        if not moments:
+            logging.info("VOD %s has no highlight with enough visual activity", vod.id)
         rows = []
         for index, moment in enumerate(moments, start=1):
             clip_dir = working / str(index)

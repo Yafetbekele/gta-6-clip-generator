@@ -136,6 +136,17 @@ class WorkflowTest(unittest.TestCase):
         self.assertTrue(all(clip.duration == 15 for clip in moments))
         self.assertEqual(rank_moments(14, [2.0], {}, [], settings), [])
 
+    def test_motion_filter_skips_intro_peaks_and_single_cuts(self):
+        settings = HighlightsConfig(clips_per_vod=3, duration_seconds=15, lead_in_seconds=3)
+        audio = {second: -30 for second in range(60)}
+        audio.update({9: -4, 27: -9, 48: -14})
+        possible = rank_moments(60, [], audio, [], settings)
+        self.assertEqual([clip.start for clip in possible], [6, 24, 45])
+        visual_activity = {27, *range(48, 56)}
+        filtered = rank_moments(60, [], audio, [], settings, active_seconds=visual_activity)
+        self.assertEqual([clip.start for clip in filtered], [45])
+        self.assertEqual(rank_moments(60, [], audio, [], settings, active_seconds=set()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

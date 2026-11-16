@@ -23,8 +23,8 @@ On macOS or Linux, use `.venv/bin/python` and `.venv/bin/gta-clips`, and use `cp
 ### Media and highlight settings
 
 - `twitch.game_name` is resolved by name. Twitch limits category archive searches to 500 videos, so a busy category can push older allowlisted archives outside that window.
-- `highlights.clips_per_vod`, `duration_seconds`, and `lead_in_seconds` control clip selection. Adjust the chat, audio, and Twitch clip weights independently. VODs with no usable signal can yield zero clips.
-- The app downloads a temporary full VOD for audio analysis and cleans its normal work files when processing completes or fails. Plan disk space for the largest archive you expect to process. The first transcription downloads the configured Whisper model unless `editing.whisper_model` points to a local model.
+- `highlights.clips_per_vod`, `duration_seconds`, and `lead_in_seconds` control clip selection. Adjust the chat, audio, and Twitch clip weights independently. Candidates also need sustained movement across multiple areas of the picture, including near the scored moment. That filter screens out mostly static intro and countdown screens before rendering. Check the actual content during review.
+- The app downloads a temporary full VOD for audio and visual analysis and cleans its normal work files when processing completes or fails. Plan disk space for the largest archive you expect to process. The first transcription downloads the configured Whisper model unless `editing.whisper_model` points to a local model.
 - Set `editing.layout = "split"` and add a streamer’s `facecam` and `gameplay` crop rectangles using the example. Values describe fractions of the source frame in `x, y, width, height` order. Channels without split coordinates use the gameplay layout.
 - Helix provides clip timestamps and view counts. For archived chat, install [TwitchDownloaderCLI](https://github.com/lay295/TwitchDownloader), set `TWITCH_DOWNLOADER` to the executable path, or put an existing TwitchDownloader JSON export at `data/chat-imports/<VOD_ID>.json`. The program uses chat timestamps for scoring and continues with audio and Twitch clips if chat is unavailable.
 
@@ -83,7 +83,7 @@ Keep OAuth callback URLs, credentials, tokens, media, and the SQLite database pr
 | `config.py` and `__main__.py` | Validate settings and dispatch CLI commands. |
 | `db.py` and `pipeline.py` | Store VOD IDs and clip states, prevent overlapping workers, and commit completed VODs and clips together. |
 | `discovery.py` and `download.py` | Find category archives and popular clips via Helix, then download temporary video and chat data. |
-| `highlights.py` | Combine chat bursts, relative audio peaks, and popular clip moments into non-overlapping windows. |
+| `highlights.py` | Rank moments by chat, audio, and Twitch clips, then keep non-overlapping windows with visual activity. |
 | `captions.py` and `editing.py` | Generate Whisper word timing and render vertical MP4s with captions and credit. |
 | `metadata.py` and `review.py` | Generate transcript-based suggestions and handle preview, editing, approval, rejection, and export. |
 | `oauth.py`, `upload/`, and `scheduler.py` | Authorize accounts, checkpoint official API uploads, and enforce the selected schedule. |
