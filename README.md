@@ -55,7 +55,17 @@ gta-clips watch-live
 Run the authorization once and approve **read-only chat access** in Twitch. Use the same Twitch app credentials in `.env` and register `http://localhost:3000` in that app's redirect URLs. The watcher uses Twitch EventSub, sends no chat messages, and stores burst counts and timestamps locally.
 
 - With `streamers = ["*"]`, the watcher selects the most-viewed live channels in the configured category, up to `live.max_channels` (15 by default, configurable up to 20). A named allowlist restricts which live channels are eligible. The selection refreshes every 30 seconds.
-- A burst requires at least 15 messages in 10 seconds by default and at least three times the preceding two-minute baseline. Set `messages_per_10_seconds`, `spike_multiplier`, and `cooldown_seconds` under `[live]` to tune it. The default cooldown is two minutes per broadcast.
+- Each newly watched broadcast collects five minutes of chat before it can trigger a clip (`live.warmup_seconds = 300`). A new connection after a disconnect warms up again. A burst requires at least 15 messages in 10 seconds and at least three times the preceding five-minute rolling baseline, excluding the current 10-second window. Set `messages_per_10_seconds`, `spike_multiplier`, and `cooldown_seconds` under `[live]` to tune it. The default cooldown is two minutes per broadcast.
+- Trigger features are saved with each new burst, including baseline messages per 10 seconds, observed seconds, and detector settings. Older clips have missing features, not estimated values.
+
+Rate clip value from 1 (poor) to 5 (excellent), with optional notes. Ratings do not approve or publish clips. You can update a rating by repeating the command. Export the ratings joined with transcripts and trigger features for later analysis:
+
+```powershell
+gta-clips queue rate CLIP_ID 4 --notes "Strong reaction and clear payoff"
+gta-clips queue ratings-export data/ratings.json
+```
+
+The export includes unrated clips with null scores. Compare scores against spike ratio, normal chat volume, and streamer to look for patterns. These are selected chat-spike samples, so they cannot establish how good ordinary non-triggered moments are. No automatic threshold tuning occurs until ratings are collected and analyzed.
 - Each burst requests exactly 30 seconds before and 30 seconds after its recorded timestamp. The watcher waits for the public Twitch VOD to cover that full window, downloads just that section, captions it, and adds it to the normal local review queue. If there is no in-progress archive, rendering can happen after the stream ends. Unavailable windows expire after 48 hours.
 - Run `gta-clips live-status` from another terminal to see recent bursts and whether their clips are ready. Use **Ctrl+C** to stop watching. Restart the watcher or run `gta-clips render-live` to process saved windows once their VODs become available.
 

@@ -19,6 +19,23 @@ from gta_clips.upload.common import Result, UploadError
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_ratings_are_saved_without_approving_and_export_with_features(self):
+        import json
+        from gta_clips.review import rate, export_ratings
+        self.seed_clip("rating-1")
+        rate(self.config, "rating-1", 2, "No payoff")
+        rate(self.config, "rating-1", 4, "Good reaction")
+        with self.assertRaises(ValueError):
+            rate(self.config, "rating-1", 6, "invalid")
+        destination = self.config.paths.data_dir / "ratings.json"
+        export_ratings(self.config, destination)
+        row = json.loads(destination.read_text())[0]
+        self.assertEqual((row["score"], row["notes"]), (4, "Good reaction"))
+        self.assertIsNone(row["baseline_per_10s"])
+        with connect(self.config.paths.database) as db:
+            self.assertEqual(db.execute("SELECT state FROM clips").fetchone()[0], "pending")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM uploads").fetchone()[0], 0)
+
     def setUp(self):
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)

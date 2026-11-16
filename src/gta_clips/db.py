@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS live_bursts (
     PRIMARY KEY (stream_id, anchor)
 );
 CREATE INDEX IF NOT EXISTS live_bursts_due ON live_bursts(state, retry_at);
+CREATE TABLE IF NOT EXISTS burst_features (
+    stream_id TEXT NOT NULL, anchor INTEGER NOT NULL, baseline_per_10s REAL,
+    observed_seconds REAL, multiplier REAL NOT NULL, minimum_messages INTEGER NOT NULL,
+    warmup_seconds INTEGER NOT NULL, PRIMARY KEY(stream_id, anchor),
+    FOREIGN KEY(stream_id, anchor) REFERENCES live_bursts(stream_id, anchor)
+);
+CREATE TABLE IF NOT EXISTS clip_ratings (
+    clip_id TEXT PRIMARY KEY REFERENCES clips(id),
+    score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5), notes TEXT NOT NULL,
+    updated INTEGER NOT NULL DEFAULT (unixepoch())
+);
 """
 
 INSERT_CLIP = """INSERT INTO clips

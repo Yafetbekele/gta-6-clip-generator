@@ -17,9 +17,14 @@ def _queue_parser(commands):
     actions = queue.add_subparsers(dest="action", required=True)
     listing = actions.add_parser("list")
     listing.add_argument("--state", choices=("all", "pending", "approved", "rejected"), default="pending")
-    for action in ("show", "preview", "edit", "approve", "reject", "export"):
+    ratings = actions.add_parser("ratings-export")
+    ratings.add_argument("destination", type=Path)
+    for action in ("show", "preview", "edit", "approve", "reject", "export", "rate"):
         subcommand = actions.add_parser(action)
         subcommand.add_argument("clip_id")
+        if action == "rate":
+            subcommand.add_argument("score", type=int, choices=range(1, 6))
+            subcommand.add_argument("--notes", default="")
         if action == "edit":
             subcommand.add_argument("--title")
             subcommand.add_argument("--description")
@@ -34,7 +39,11 @@ def _queue_parser(commands):
 
 
 def _review(config, args):
-    if args.action == "list":
+    if args.action == "rate":
+        review.rate(config, args.clip_id, args.score, args.notes)
+    elif args.action == "ratings-export":
+        review.export_ratings(config, args.destination)
+    elif args.action == "list":
         review.list_clips(config, args.state)
     elif args.action in ("show", "preview"):
         review.show(config, args.clip_id, preview=args.action == "preview")

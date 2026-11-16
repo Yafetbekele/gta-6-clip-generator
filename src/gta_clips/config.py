@@ -72,6 +72,7 @@ class ScheduleConfig:
 
 @dataclass(frozen=True)
 class LiveConfig:
+    warmup_seconds: int = 300
     max_channels: int = 15
     messages_per_10_seconds: int = 15
     spike_multiplier: float = 3.0
@@ -217,6 +218,7 @@ def _live(raw: object) -> LiveConfig:
     if multiplier < 1:
         raise ConfigError("live.spike_multiplier must be at least 1")
     return LiveConfig(
+        warmup_seconds=_integer(options.get("warmup_seconds", 300), "live.warmup_seconds", 0),
         max_channels=_integer(options.get("max_channels", defaults.max_channels), "live.max_channels", 1, 20),
         messages_per_10_seconds=_integer(options.get("messages_per_10_seconds", defaults.messages_per_10_seconds),
                                          "live.messages_per_10_seconds", 1),

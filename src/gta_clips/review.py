@@ -15,6 +15,32 @@ from .metadata import attribution
 VISIBILITIES = ("private", "unlisted", "public")
 
 
+def rate(config: Config, clip_id: str, score: int, notes: str):
+    if type(score) is not int or not 1 <= score <= 5:
+        raise ValueError("Rate clip value from 1 (poor) to 5 (excellent)")
+    with connect(config.paths.database) as db:
+        get_clip(db, clip_id)
+        db.execute("""INSERT INTO clip_ratings(clip_id, score, notes) VALUES (?, ?, ?)
+                    ON CONFLICT(clip_id) DO UPDATE SET score=excluded.score,
+                    notes=excluded.notes, updated=unixepoch()""", (clip_id, score, notes))
+    print(f"Saved rating {score}/5 for {clip_id}")
+
+
+def export_ratings(config: Config, destination: Path):
+    with connect(config.paths.database) as db:
+        rows = db.execute("""SELECT c.id, c.streamer, c.path, c.start, c.duration,
+            c.transcript, r.score, r.notes, b.anchor, b.messages, b.game_name,
+            f.baseline_per_10s, f.observed_seconds, f.multiplier, f.minimum_messages,
+            f.warmup_seconds, b.messages / NULLIF(f.baseline_per_10s, 0) AS spike_ratio
+            FROM clips c LEFT JOIN clip_ratings r ON r.clip_id=c.id
+            LEFT JOIN live_bursts b ON b.clip_id=c.id
+            LEFT JOIN burst_features f ON f.stream_id=b.stream_id AND f.anchor=b.anchor
+            ORDER BY c.created, c.id""").fetchall()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps([dict(row) for row in rows], indent=2), encoding="utf-8")
+    print(f"Exported {len(rows)} clips and ratings to {destination.resolve()}")
+
+
 def get_clip(db, clip_id: str):
     clip = db.execute("SELECT * FROM clips WHERE id=?", (clip_id,)).fetchone()
     if clip is None:

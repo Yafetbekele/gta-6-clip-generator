@@ -34,25 +34,36 @@ class Broadcast:
 
 @dataclass
 class ChatRate:
+    first_seen: float | None = None
     recent: deque[float] = field(default_factory=deque)
     history: deque[float] = field(default_factory=deque)
     latest: float = 0
     last_burst: int = 0
 
     def observe(self, timestamp: float, config: LiveConfig) -> int:
+        if self.first_seen is None:
+            self.first_seen = timestamp
         if timestamp < self.latest - 10:
             return 0
         self.latest = max(timestamp, self.latest)
         self.recent.append(self.latest)
         while self.recent and self.recent[0] <= self.latest - 10:
             self.history.append(self.recent.popleft())
-        while self.history and self.history[0] <= self.latest - 130:
+        while self.history and self.history[0] <= self.latest - 310:
             self.history.popleft()
-        threshold = max(config.messages_per_10_seconds, len(self.history) / 12 * config.spike_multiplier)
+        if self.latest - self.first_seen < config.warmup_seconds:
+            return 0
+        threshold = max(config.messages_per_10_seconds, self.baseline * config.spike_multiplier)
         return len(self.recent) if len(self.recent) >= threshold else 0
 
+    @property
+    def baseline(self) -> float:
+        seconds = min(300, max(10, self.latest - (self.first_seen or 0) - 10))
+        return len(self.history) * 10 / seconds
 
-def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: int) -> bool:
+
+def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: int,
+                 baseline: float | None = None, observed_seconds: float | None = None) -> bool:
     """Commit a burst before the post-roll is available. Cooldown survives restarts."""
     anchor = int(timestamp)
     if anchor < stream.started_at + HALF_WINDOW:
@@ -70,6 +81,9 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
             (stream.stream_id, anchor, stream.broadcaster_id, stream.login,
              config.twitch.game_name, messages, anchor + HALF_WINDOW),
         )
+        db.execute("INSERT INTO burst_features VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (stream.stream_id, anchor, baseline, observed_seconds, config.live.spike_multiplier,
+                    config.live.messages_per_10_seconds, config.live.warmup_seconds))
     return True
 
 
@@ -184,7 +198,8 @@ def _chat_event(config: Config, packet: dict, desired: dict[str, Broadcast],
         if int(timestamp) < stream.started_at + HALF_WINDOW:
             return
         rate.last_burst = int(timestamp)
-        if record_burst(config, stream, timestamp, count):
+        if record_burst(config, stream, timestamp, count, rate.baseline,
+                        rate.latest - rate.first_seen):
             logging.info("Chat burst at %s: %s messages in 10s. Waiting for post-roll.", stream.login, count)
 
 
@@ -259,7 +274,7 @@ def _render_loop(config: Config, stop: Event):
         stop.wait(15)
 
 
-def watch(config: Config):
+def watch(config: Config, stop: Event | None = None):
     if not config.twitch.streamers:
         raise ValueError('Set twitch.streamers to channel logins or ["*"] before watching')
     with worker_lock(config.paths.data_dir, "watch-live"):
@@ -267,7 +282,7 @@ def watch(config: Config):
         token, _ = access_token(config.paths.database, "twitch")
         _chat_user(token, twitch.client_id)
         game = twitch.game_id(config.twitch.game_name)
-        stop = Event()
+        stop = stop if stop is not None else Event()
         renderer = Thread(target=_render_loop, args=(config, stop), name="live-render", daemon=True)
         renderer.start()
         joins = deque()
