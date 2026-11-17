@@ -65,6 +65,8 @@ gta-clips queue rate CLIP_ID 4 --notes "Strong reaction and clear payoff"
 gta-clips queue ratings-export data/ratings.json
 ```
 
+For a browser-based review screen, run `gta-clips review-web --open`. It opens a local page at `http://127.0.0.1:8765` with video playback, 1–5 scores, notes, filters, and a Save & next unrated button. Ratings persist in the same SQLite database used by the CLI and ratings export. Reopening the launcher reuses the existing server. This page only saves ratings and has no publishing controls. On Windows, a shortcut can target `.venv\Scripts\pythonw.exe` with arguments `-m gta_clips --config "FULL_PATH_TO_CONFIG" review-web --open` and the project folder as its working directory.
+
 The export includes unrated clips with null scores. Compare scores against spike ratio, normal chat volume, and streamer to look for patterns. These are selected chat-spike samples, so they cannot establish how good ordinary non-triggered moments are. No automatic threshold tuning occurs until ratings are collected and analyzed.
 - Each burst requests exactly 30 seconds before and 30 seconds after its recorded timestamp. The watcher waits for the public Twitch VOD to cover that full window, downloads just that section, captions it, and adds it to the normal local review queue. If there is no in-progress archive, rendering can happen after the stream ends. Unavailable windows expire after 48 hours.
 - Run `gta-clips live-status` from another terminal to see recent bursts and whether their clips are ready. Use **Ctrl+C** to stop watching. Restart the watcher or run `gta-clips render-live` to process saved windows once their VODs become available.

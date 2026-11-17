@@ -82,6 +82,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser("render-live", help="Process saved chat bursts that now have a VOD")
     commands.add_parser("live-status", help="List recent chat bursts and their clip status")
     commands.add_parser("publish", help="Send approved clips when their schedule permits")
+    web = commands.add_parser("review-web", help="Watch clips and save ratings in a local browser")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--open", action="store_true", dest="open_browser")
     auth = commands.add_parser("auth", help="Authorize Twitch chat or a publishing account")
     auth.add_argument("platform", choices=("twitch", *PLATFORMS))
     retry = commands.add_parser("retry", help="Return a failed upload to its platform queue")
@@ -113,6 +116,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv(args.config.expanduser().resolve().parent / ".env")
     try:
         _logging(config, args.command)
+        if args.command == "review-web":
+            from .review_web import serve
+            serve(config, args.port, args.open_browser)
+            return 0
         if args.command == "ingest":
             from .pipeline import ingest
             return ingest(config)
