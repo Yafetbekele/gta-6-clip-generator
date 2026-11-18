@@ -5,10 +5,13 @@ from collections.abc import Sequence
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import logging
+import sqlite3
 import subprocess
+import sys
 
 from .config import ConfigError, PLATFORMS, load_config
 from .db import WorkerBusy, worker_lock
+from .diagnostics import describe, install_thread_logging, log_versions
 from . import review
 
 
@@ -18,7 +21,8 @@ def _queue_parser(commands):
     listing = actions.add_parser("list")
     listing.add_argument("--state", choices=("all", "pending", "approved", "rejected"), default="pending")
     ratings = actions.add_parser("ratings-export")
-    ratings.add_argument("destination", type=Path)
+    ratings.add_argument("destination", type=Path, help="A .json or .csv file")
+    actions.add_parser("ratings-summary", help="Describe how ratings relate to recorded features")
     for action in ("show", "preview", "edit", "approve", "reject", "export", "rate"):
         subcommand = actions.add_parser(action)
         subcommand.add_argument("clip_id")
@@ -43,6 +47,8 @@ def _review(config, args):
         review.rate(config, args.clip_id, args.score, args.notes)
     elif args.action == "ratings-export":
         review.export_ratings(config, args.destination)
+    elif args.action == "ratings-summary":
+        review.print_ratings_summary(config)
     elif args.action == "list":
         review.list_clips(config, args.state)
     elif args.action in ("show", "preview"):
@@ -58,18 +64,25 @@ def _review(config, args):
         review.export_clip(config, args.clip_id, args.destination)
 
 
-def _logging(config, command: str):
-    if command not in ("ingest", "publish", "watch-live", "render-live"):
-        return
+LOGGED_COMMANDS = ("ingest", "publish", "watch-live", "render-live", "review-web")
+
+
+def _logging(config, command: str) -> bool:
+    if command not in LOGGED_COMMANDS:
+        return False
     directory = config.paths.data_dir
     directory.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[logging.StreamHandler(), RotatingFileHandler(
-            directory / f"{command}.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8",
-        )],
-    )
+    handlers = [RotatingFileHandler(
+        directory / f"{command}.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8",
+    )]
+    if sys.stderr is not None:  # pythonw.exe (the Desktop shortcut) has no console.
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+                        handlers=handlers)
+    install_thread_logging()
+    if command != "review-web":
+        log_versions()
+    return True
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -114,8 +127,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     from requests import RequestException
 
     load_dotenv(args.config.expanduser().resolve().parent / ".env")
+    logged = False
+
+    def fail(message: str, error: BaseException, code: int = 1):
+        # parser.exit only reaches the console; keep the reason and traceback in the log file too.
+        if logged:
+            logging.error("%s exiting: %s", args.command, describe(error), exc_info=error)
+        parser.exit(code, message)
+
     try:
-        _logging(config, args.command)
+        logged = _logging(config, args.command)
         if args.command == "review-web":
             from .review_web import serve
             serve(config, args.port, args.open_browser)
@@ -150,11 +171,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except WorkerBusy as exc:
         parser.exit(0 if args.command in ("ingest", "publish", "watch-live") else 1, f"{exc}\n")
     except RequestException as exc:
-        parser.exit(1, f"API request failed ({type(exc).__name__}). Check credentials and connectivity.\n")
-    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
-        parser.exit(1, f"{exc}\n")
+        fail(f"API request failed ({type(exc).__name__}). Check credentials and connectivity.\n", exc)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as exc:
+        fail(f"{describe(exc)}\n", exc)
     except KeyboardInterrupt:
+        if logged:
+            logging.info("%s stopped by Ctrl+C", args.command)
         return 130
+    except Exception as exc:
+        fail(f"Unexpected error: {describe(exc)}\n", exc)
     return 0
 
 

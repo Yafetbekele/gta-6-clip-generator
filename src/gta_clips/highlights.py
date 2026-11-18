@@ -6,13 +6,17 @@ from pathlib import Path
 import re
 import statistics
 import subprocess
+import sys
 
-import av
 import numpy as np
 
 from .config import HighlightsConfig
+from .diagnostics import CommandFailed, _kill_tree
 from .discovery import PopularClip
 from .download import ffmpeg_binary
+
+MOTION_WIDTH, MOTION_HEIGHT = 96, 54
+MOTION_FPS = 2
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,11 @@ class Moment:
     start: int
     duration: int
     score: float
+    # Each signal's contribution at the chosen peak, kept so ratings can be compared per signal.
+    chat_score: float = 0.0
+    audio_score: float = 0.0
+    twitch_clip_score: float = 0.0
+    motion_seconds: int | None = None
 
 
 def audio_levels(source: Path) -> dict[int, float]:
@@ -43,35 +52,46 @@ def audio_levels(source: Path) -> dict[int, float]:
     return points
 
 
-def video_activity(source: Path, duration: int) -> set[int]:
-    """Find seconds with motion across several parts of the video frame."""
-    active = set()
-    with av.open(str(source)) as media:
-        if not media.streams.video:
-            return active
-        stream = media.streams.video[0]
-        stream.thread_type = "AUTO"
-        start = None
-        next_sample = 0
-        previous = None
-        for frame in media.decode(stream):
-            if frame.time is None:
-                continue
-            if start is None:
-                start = frame.time
-            elapsed = frame.time - start
-            if elapsed >= duration:
+def _changed_tiles(current: np.ndarray, previous: np.ndarray) -> bool:
+    # A small animated timer or facecam alone rarely changes four of these 18 tiles.
+    changes = np.abs(current - previous).reshape(3, 18, 6, 16).mean(axis=(1, 3))
+    return np.count_nonzero(changes >= 4.5) >= 4
+
+
+def video_activity(source: Path, duration: int, timeout: int = 3600) -> set[int]:
+    """Find seconds with motion across several parts of the video frame.
+
+    FFmpeg samples two tiny grayscale frames per second, so Python never handles full frames.
+    """
+    frame_size = MOTION_WIDTH * MOTION_HEIGHT
+    command = [ffmpeg_binary(), "-hide_banner", "-loglevel", "error", "-i", str(source),
+               "-map", "0:v:0?", "-t", str(duration), "-an",
+               "-vf", f"fps={MOTION_FPS},scale={MOTION_WIDTH}:{MOTION_HEIGHT},format=gray",
+               "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    flags = 0x4000 | 0x08000000 if sys.platform == "win32" else 0  # below normal, no window
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               creationflags=flags)
+    active, previous, index = set(), None, 0
+    try:
+        while True:
+            data = process.stdout.read(frame_size)
+            if len(data) < frame_size:
                 break
-            if elapsed < next_sample:
-                continue
-            current = frame.reformat(width=96, height=54, format="gray").to_ndarray().astype(np.int16)
-            if previous is not None:
-                # A small animated timer or facecam alone rarely changes four of these 18 tiles.
-                changes = np.abs(current - previous).reshape(3, 18, 6, 16).mean(axis=(1, 3))
-                if np.count_nonzero(changes >= 4.5) >= 4:
-                    active.add(int(elapsed))
+            current = np.frombuffer(data, dtype=np.uint8).reshape(MOTION_HEIGHT, MOTION_WIDTH).astype(np.int16)
+            if previous is not None and _changed_tiles(current, previous):
+                active.add(index // MOTION_FPS)
             previous = current
-            next_sample = (int(2 * elapsed) + 1) / 2
+            index += 1
+        stderr = process.stderr.read().decode("utf-8", "replace")
+        code = process.wait(timeout=timeout)
+    except BaseException:
+        _kill_tree(process)
+        raise
+    finally:
+        process.stdout.close()
+        process.stderr.close()
+    if code:
+        raise CommandFailed(code, command, stderr=stderr)
     return active
 
 
@@ -90,8 +110,12 @@ def rank_moments(
     if duration < 15:
         return []
     length = min(duration, settings.duration_seconds)
+    if not settings.require_motion:
+        active_seconds = None
     chat_counts = [0] * (duration + 1)
-    for offset in chat:
+    for message in chat:
+        # Viewers type after they see something, so a message points slightly earlier in the video.
+        offset = message - settings.chat_reaction_lag_seconds
         if 0 <= offset < duration:
             chat_counts[int(offset) + 1] += 1
     for second in range(1, duration + 1):
@@ -107,10 +131,11 @@ def rank_moments(
         for second in range(max(0, int(clip.offset)), end):
             clip_signal[second] = max(clip_signal[second], log1p(max(0, clip.views)) + 1)
     top_clip = max(clip_signal) or 1
+    clip_scores = [score / top_clip for score in clip_signal]
     scores = [
         chat_score * settings.chat_weight + audio_score * settings.audio_weight
-        + clip_score / top_clip * settings.twitch_clips_weight
-        for chat_score, audio_score, clip_score in zip(chatter, loudness, clip_signal)
+        + clip_score * settings.twitch_clips_weight
+        for chat_score, audio_score, clip_score in zip(chatter, loudness, clip_scores)
     ]
     # Score one peak per local run of equal scores and prefer the start of a tie.
     candidates = sorted(
@@ -132,7 +157,10 @@ def rank_moments(
                 continue
         if all(start + length <= clip.start or clip.start + clip.duration <= start
                for clip in chosen):
-            chosen.append(Moment(start, length, scores[peak]))
+            motion = (sum(second in active_seconds for second in range(start, start + length))
+                      if active_seconds is not None else None)
+            chosen.append(Moment(start, length, scores[peak], chatter[peak], loudness[peak],
+                                 clip_scores[peak], motion))
             if len(chosen) == settings.clips_per_vod:
                 break
     return chosen

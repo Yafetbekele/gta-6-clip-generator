@@ -16,7 +16,7 @@ from gta_clips.review_web import make_server
 class ReviewWebTest(unittest.TestCase):
     def test_video_ranges_and_authenticated_rating_persistence(self):
         with TemporaryDirectory() as directory:
-            config=replace(load_config('config.example.toml'), paths=PathsConfig(Path(directory)))
+            config=replace(load_config(Path(__file__).resolve().parents[1]/'config.example.toml'), paths=PathsConfig(Path(directory)))
             (Path(directory)/'test.mp4').write_bytes(b'0123456789')
             with connect(config.paths.database) as db:
                 db.execute("INSERT INTO vods(id,streamer,status) VALUES ('1','test','done')")
@@ -31,7 +31,7 @@ class ReviewWebTest(unittest.TestCase):
                 with urllib.request.urlopen(urllib.request.Request(url+'/video/clip',headers={'Range':'bytes=2-5'})) as response:
                     self.assertEqual(response.status,206)
                     self.assertEqual(response.read(),b'2345')
-                body=json.dumps({'clip_id':'clip','score':4,'notes':'Great payoff'}).encode()
+                body=json.dumps({'clip_id':'clip','score':4,'notes':'Great payoff','watched_seconds':41.5}).encode()
                 with self.assertRaises(urllib.error.HTTPError) as blocked:
                     urllib.request.urlopen(urllib.request.Request(url+'/api/rate',data=body))
                 self.assertEqual(blocked.exception.code,403)
@@ -44,5 +44,17 @@ class ReviewWebTest(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as blocked:
                     urllib.request.urlopen(urllib.request.Request(url+'/api/clips',headers={'Host':'untrusted.example'}))
                 self.assertEqual(blocked.exception.code,403)
+                # The desktop shortcut may open localhost instead of 127.0.0.1.
+                with urllib.request.urlopen(urllib.request.Request(url+'/health',headers={'Host':f'localhost:{server.server_port}'})) as response:
+                    self.assertEqual(response.status,200)
+                with self.assertRaises(urllib.error.HTTPError) as outside:
+                    urllib.request.urlopen(urllib.request.Request(url+'/video/clip',headers={'Range':'bytes=50-60'}))
+                self.assertEqual(outside.exception.code,416)
+                self.assertEqual(outside.exception.headers['Content-Range'],'bytes */10')
+                request=urllib.request.Request(url+'/api/rate',data=json.dumps({'clip_id':'clip','score':5,'notes':'Even better'}).encode(),headers={'X-Review-Token':token})
+                with urllib.request.urlopen(request) as response:self.assertTrue(json.load(response)['saved'])
+                with connect(config.paths.database) as db:
+                    history=[tuple(row) for row in db.execute('SELECT score,watched_seconds FROM rating_events ORDER BY id')]
+                self.assertEqual(history,[(4,41.5),(5,None)])
             finally:
                 server.shutdown();server.server_close();thread.join()

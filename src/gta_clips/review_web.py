@@ -21,10 +21,12 @@ def make_server(config: Config, port: int = 8765):
         def log_message(self, *_):
             pass
 
-        def reply(self, status, value, content_type="application/json"):
+        def reply(self, status, value, content_type="application/json", headers=None):
             data = json.dumps(value).encode() if content_type == "application/json" else value
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            for name, header in (headers or {}).items():
+                self.send_header(name, header)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -32,7 +34,9 @@ def make_server(config: Config, port: int = 8765):
             self.wfile.write(data)
 
         def local_host(self):
-            return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
+            # Exact names only, which still blocks DNS-rebinding hosts.
+            port = self.server.server_port
+            return self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}")
 
         def do_GET(self):
             if not self.local_host():
@@ -60,10 +64,11 @@ def make_server(config: Config, port: int = 8765):
                 size = video.stat().st_size
                 start, end = 0, size - 1
                 partial = self.headers.get("Range")
+                unsatisfiable = {"Content-Range": f"bytes */{size}"}
                 if partial:
                     match = re.fullmatch(r"bytes=(\d*)-(\d*)", partial)
                     if not match or not any(match.groups()):
-                        return self.reply(416, {"error": "Invalid range"})
+                        return self.reply(416, {"error": "Invalid range"}, headers=unsatisfiable)
                     left, right = match.groups()
                     if left:
                         start = int(left)
@@ -71,7 +76,7 @@ def make_server(config: Config, port: int = 8765):
                     else:
                         start = max(0, size - int(right))
                     if start > end or start >= size:
-                        return self.reply(416, {"error": "Range outside video"})
+                        return self.reply(416, {"error": "Range outside video"}, headers=unsatisfiable)
                 self.send_response(206 if partial else 200)
                 self.send_header("Content-Type", "video/mp4")
                 self.send_header("Accept-Ranges", "bytes")
@@ -108,7 +113,11 @@ def make_server(config: Config, port: int = 8765):
                     raise ValueError("Select a clip")
                 if not isinstance(body.get("notes", ""), str) or len(body.get("notes", "")) > 4000:
                     raise ValueError("Notes must be at most 4000 characters")
-                rate(config, body["clip_id"], body.get("score"), body.get("notes", ""))
+                watched = body.get("watched_seconds")
+                if watched is not None and (type(watched) not in (int, float) or not 0 <= watched <= 86400):
+                    raise ValueError("watched_seconds must be a number of seconds")
+                rate(config, body["clip_id"], body.get("score"), body.get("notes", ""),
+                     float(watched) if watched is not None else None)
             except (ValueError, TypeError) as error:
                 return self.reply(400, {"error": str(error)})
             self.reply(200, {"saved": True})

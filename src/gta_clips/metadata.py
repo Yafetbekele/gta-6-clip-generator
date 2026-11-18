@@ -11,6 +11,11 @@ class Metadata:
     hashtags: str
 
 
+NON_GAME_CATEGORIES = {"just chatting", "irl", "music", "art", "talk shows & podcasts", "asmr",
+                       "sports", "travel & outdoors", "food & drink", "pools, hot tubs, and beaches"}
+GAME_THEMES = {"car": "#Cars", "race": "#Racing", "chase": "#Chase", "mission": "#Missions"}
+
+
 def attribution(streamer: str) -> str:
     return f"@{streamer} on Twitch\nhttps://www.twitch.tv/{streamer}"
 
@@ -30,9 +35,13 @@ def generate(transcript: str, game: str, streamer: str, vod_id: str, start: int)
     description = f"{attribution(streamer)}\nSource VOD: https://www.twitch.tv/videos/{vod_id}?t={start}s"
     if words:
         description = f"{_excerpt(words, 240)}\n\n{description}"
-    tag = "GTA6" if game.casefold() == "grand theft auto vi" else re.sub(r"\W", "", game)
-    themes = {"car": "#Cars", "race": "#Racing", "chase": "#Chase", "mission": "#Missions"}
+    category = game.casefold()
+    tag = "GTA6" if category == "grand theft auto vi" else re.sub(r"\W", "", game)
     tokens = set(re.findall(r"\w+", words.casefold()))
-    tags = " ".join(([f"#{tag}"] if tag else []) + ["#TwitchClips", "#Gaming"] +
-                    [tag for keyword, tag in themes.items() if keyword in tokens][:2])
+    tags = ([f"#{tag}"] if tag else []) + ["#TwitchClips"]
+    if category not in NON_GAME_CATEGORIES:
+        # Driving themes describe a game; in Just Chatting "car" or "race" means something else.
+        tags.append("#Gaming")
+        tags += [theme for keyword, theme in GAME_THEMES.items() if keyword in tokens][:2]
+    tags = " ".join(tags)
     return Metadata(title, description, tags)

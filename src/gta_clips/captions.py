@@ -18,6 +18,9 @@ class Transcriber:
     def __init__(self, model: str):
         self.name = model
         self.model = None
+        # Facts about the most recent transcription, kept as rating features.
+        self.language: str | None = None
+        self.language_probability: float | None = None
 
     def transcribe(self, audio: Path) -> list[Word]:
         if self.model is None:
@@ -27,7 +30,10 @@ class Transcriber:
             if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (16000, 1, 2):
                 raise ValueError("Whisper input must be 16 kHz mono PCM16")
             samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2").astype(np.float32)
-        segments, _ = self.model.transcribe(samples / 32768.0, word_timestamps=True, vad_filter=True)
+        segments, info = self.model.transcribe(samples / 32768.0, word_timestamps=True, vad_filter=True)
+        self.language = getattr(info, "language", None)
+        probability = getattr(info, "language_probability", None)
+        self.language_probability = float(probability) if probability is not None else None
         return [Word(word.start, word.end, word.word.strip())
                 for segment in segments for word in segment.words or []
                 if word.word.strip() and word.start is not None and word.end is not None]

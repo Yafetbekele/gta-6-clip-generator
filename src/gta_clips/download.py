@@ -11,6 +11,8 @@ import sys
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
+from .diagnostics import CommandFailed, describe, run
+
 
 def ffmpeg_binary() -> str:
     """Prefer a configured binary and fall back to the wheel's FFmpeg."""
@@ -20,18 +22,46 @@ def ffmpeg_binary() -> str:
     return get_ffmpeg_exe()
 
 
-def download_vod(url: str, directory: Path, *, section: tuple[int, int] | None = None) -> Path:
-    options = [] if section is None else [
-        "--download-sections", f"*{section[0]}-{section[1]}", "--force-keyframes-at-cuts",
-    ]
-    result = subprocess.run(
-        [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
-         "--ffmpeg-location", ffmpeg_binary(),
-         "--no-progress", "--no-warnings", "--retries", "3", "--fragment-retries", "5",
-         *options, "-f", "best[ext=mp4]/best", "-o", str(directory / "source.%(ext)s"),
-         "--print", "after_move:filepath", "--", url],
-        timeout=4 * 3600 if section is None else 180, check=True, capture_output=True, text=True,
-    )
+class VodUnavailable(RuntimeError):
+    """The VOD cannot be downloaded without access this tool does not have. Retrying will not help."""
+
+
+# yt-dlp messages that mean the video is restricted or gone, not that the network hiccupped.
+UNAVAILABLE_MARKERS = (
+    "subscriber-only", "only available to subscribers", "must be logged into an account",
+    "does not exist", "has been removed", "video is unavailable", "video unavailable",
+    "this video is not available", "http error 404",
+)
+
+
+def format_selector(max_height: int | None) -> str:
+    if not max_height:
+        return "best[ext=mp4]/best"
+    return (f"best[height<={max_height}][ext=mp4]/best[height<={max_height}]/"
+            "best[ext=mp4]/best")
+
+
+def download_vod(url: str, directory: Path, *, section: tuple[float, float] | None = None,
+                 max_height: int | None = None) -> Path:
+    """Fetch a VOD or one section of it.
+
+    A section is copied without re-encoding. FFmpeg's input seek makes time 0 of the file match
+    ``section[0]`` on the VOD, so callers should request a few seconds of padding and trim
+    exactly while rendering, which re-encodes anyway.
+    """
+    options = [] if section is None else ["--download-sections", f"*{section[0]}-{section[1]}"]
+    command = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",
+               "--ffmpeg-location", ffmpeg_binary(),
+               "--no-progress", "--no-warnings", "--retries", "3", "--fragment-retries", "5",
+               *options, "-f", format_selector(max_height), "-o", str(directory / "source.%(ext)s"),
+               "--print", "after_move:filepath", "--", url]
+    try:
+        result = run(command, timeout=4 * 3600 if section is None else 300, low_priority=True)
+    except CommandFailed as error:
+        if not error.timed_out and any(marker in (error.stderr or "").lower()
+                                       for marker in UNAVAILABLE_MARKERS):
+            raise VodUnavailable(error.summary) from None
+        raise
     lines = result.stdout.strip().splitlines()
     if not lines:
         raise RuntimeError("yt-dlp did not report a VOD file")
@@ -56,11 +86,10 @@ def replay_chat(vod_id: str, directory: Path, imports: Path) -> list[float]:
         if existing.is_file():
             return read_chat(existing)
         if binary:
-            subprocess.run([binary, "chatdownload", "-u", vod_id, "-o", str(path)],
-                           check=True, timeout=600, capture_output=True)
+            run([binary, "chatdownload", "-u", vod_id, "-o", str(path)], timeout=600)
             return read_chat(path)
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
-        logging.warning("Chat replay unavailable for %s (%s)", vod_id, type(exc).__name__)
+        logging.warning("Chat replay unavailable for %s (%s)", vod_id, describe(exc))
         return []
     logging.info("Set TWITCH_DOWNLOADER or import chat to enable chat scoring")
     return []

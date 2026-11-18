@@ -93,7 +93,6 @@ class LiveTest(unittest.TestCase):
         self.assertTrue(record_burst(self.config, stream, anchor, 22))
         with patch("gta_clips.live_render.Twitch") as twitch, \
                 patch("gta_clips.live_render.download_vod") as download, \
-                patch("gta_clips.live_render.probe_duration", return_value=60), \
                 patch("gta_clips.live_render.render", return_value="The jump worked") as render:
             twitch.return_value.get.return_value = {"data": [
                 {"stream_id": "12", "id": "9", "duration": "3m",
@@ -101,7 +100,9 @@ class LiveTest(unittest.TestCase):
             ]}
             render_due(self.config)
             render_due(self.config)
-        self.assertEqual(download.call_args.kwargs["section"], (45, 105))
+        # Three seconds of padding on each side; render() cuts the exact 60 s from offset 3.
+        self.assertEqual(download.call_args.kwargs["section"], (42, 108))
+        self.assertEqual(render.call_args.args[3].start, 3)
         self.assertEqual(render.call_args.args[3].duration, 60)
         render.assert_called_once()
         with connect(self.config.paths.database) as db:

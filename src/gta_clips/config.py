@@ -41,6 +41,10 @@ class HighlightsConfig:
     chat_weight: float = 1.0
     audio_weight: float = 1.0
     twitch_clips_weight: float = 1.0
+    # Seconds between something happening on stream and chat reacting to it. 0 keeps chat as-is.
+    chat_reaction_lag_seconds: int = 0
+    # Skip moments without on-screen motion. Turn off for categories like Just Chatting.
+    require_motion: bool = True
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,10 @@ class ScheduleConfig:
     min_spacing_minutes: int = 120
 
 
+DEFAULT_IGNORED_CHATTERS = ("nightbot", "streamelements", "moobot", "fossabot", "streamlabs",
+                            "wizebot", "sery_bot", "soundalerts", "botrixoficial")
+
+
 @dataclass(frozen=True)
 class LiveConfig:
     warmup_seconds: int = 300
@@ -77,6 +85,13 @@ class LiveConfig:
     messages_per_10_seconds: int = 15
     spike_multiplier: float = 3.0
     cooldown_seconds: int = 120
+    # A burst also needs this many different chatters, so one spammer can't trigger it.
+    min_unique_chatters: int = 5
+    ignored_chatters: tuple[str, ...] = DEFAULT_IGNORED_CHATTERS
+    # Comparison windows rendered like bursts, so ratings can show what the trigger adds.
+    control_interval_seconds: int = 3600
+    near_miss_multiplier: float = 2.0
+    near_miss_interval_seconds: int = 3600
 
 
 @dataclass(frozen=True)
@@ -164,7 +179,13 @@ def _highlights(raw: object) -> HighlightsConfig:
     }
     if not any(weights.values()):
         raise ConfigError("At least one highlight weight must be greater than zero")
+    require_motion = options.get("require_motion", True)
+    if type(require_motion) is not bool:
+        raise ConfigError("highlights.require_motion must be true or false")
     return HighlightsConfig(
+        chat_reaction_lag_seconds=_integer(options.get("chat_reaction_lag_seconds", 0),
+                                           "highlights.chat_reaction_lag_seconds", 0, 30),
+        require_motion=require_motion,
         clips_per_vod=_integer(options.get("clips_per_vod", 3), "highlights.clips_per_vod", 1),
         duration_seconds=duration,
         lead_in_seconds=_integer(
@@ -217,7 +238,24 @@ def _live(raw: object) -> LiveConfig:
                                      "live.spike_multiplier")
     if multiplier < 1:
         raise ConfigError("live.spike_multiplier must be at least 1")
+    near_miss = _nonnegative_number(options.get("near_miss_multiplier", defaults.near_miss_multiplier),
+                                    "live.near_miss_multiplier")
+    if not 1 <= near_miss < multiplier:
+        raise ConfigError("live.near_miss_multiplier must be at least 1 and below live.spike_multiplier")
+    ignored = options.get("ignored_chatters", list(defaults.ignored_chatters))
+    if not isinstance(ignored, list):
+        raise ConfigError("live.ignored_chatters must be an array of Twitch logins")
     return LiveConfig(
+        min_unique_chatters=_integer(options.get("min_unique_chatters", defaults.min_unique_chatters),
+                                     "live.min_unique_chatters", 1),
+        ignored_chatters=tuple(dict.fromkeys(_login(name, "live.ignored_chatters") for name in ignored)),
+        control_interval_seconds=_integer(
+            options.get("control_interval_seconds", defaults.control_interval_seconds),
+            "live.control_interval_seconds", 0),
+        near_miss_multiplier=near_miss,
+        near_miss_interval_seconds=_integer(
+            options.get("near_miss_interval_seconds", defaults.near_miss_interval_seconds),
+            "live.near_miss_interval_seconds", 0),
         warmup_seconds=_integer(options.get("warmup_seconds", 300), "live.warmup_seconds", 0),
         max_channels=_integer(options.get("max_channels", defaults.max_channels), "live.max_channels", 1, 20),
         messages_per_10_seconds=_integer(options.get("messages_per_10_seconds", defaults.messages_per_10_seconds),

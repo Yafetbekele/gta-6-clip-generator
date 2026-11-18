@@ -1,7 +1,9 @@
 """Local CLI for previewing and approving the exact clip metadata to upload."""
 
 from pathlib import Path
+import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -15,30 +17,135 @@ from .metadata import attribution
 VISIBILITIES = ("private", "unlisted", "public")
 
 
-def rate(config: Config, clip_id: str, score: int, notes: str):
+def rate(config: Config, clip_id: str, score: int, notes: str, watched_seconds: float | None = None):
+    """Save the current rating and keep every earlier one in rating_events."""
     if type(score) is not int or not 1 <= score <= 5:
         raise ValueError("Rate clip value from 1 (poor) to 5 (excellent)")
+    if watched_seconds is not None and not (math.isfinite(watched_seconds) and watched_seconds >= 0):
+        raise ValueError("watched_seconds must be a nonnegative number")
     with connect(config.paths.database) as db:
         get_clip(db, clip_id)
         db.execute("""INSERT INTO clip_ratings(clip_id, score, notes) VALUES (?, ?, ?)
                     ON CONFLICT(clip_id) DO UPDATE SET score=excluded.score,
                     notes=excluded.notes, updated=unixepoch()""", (clip_id, score, notes))
+        db.execute("INSERT INTO rating_events(clip_id, score, notes, watched_seconds) VALUES (?, ?, ?, ?)",
+                   (clip_id, score, notes, watched_seconds))
     print(f"Saved rating {score}/5 for {clip_id}")
 
 
-def export_ratings(config: Config, destination: Path):
+RATINGS_QUERY = """SELECT c.id, c.streamer, c.path, c.start, c.duration, c.created, c.state,
+    c.transcript, r.score, r.notes, r.updated AS rated_at,
+    (SELECT COUNT(*) FROM rating_events e WHERE e.clip_id=c.id) AS rating_count,
+    (SELECT MAX(watched_seconds) FROM rating_events e WHERE e.clip_id=c.id) AS watched_seconds,
+    COALESCE(b.trigger_kind, cf.source) AS source, b.anchor, b.messages, b.game_name,
+    f.baseline_per_10s, f.observed_seconds, f.multiplier, f.minimum_messages,
+    f.warmup_seconds, b.messages / NULLIF(f.baseline_per_10s, 0) AS spike_ratio,
+    f.unique_chatters, f.peak_messages, f.peak_unique_chatters, f.peak_offset_s,
+    f.viewer_count, f.viewer_rank, f.language AS stream_language, f.stream_age_s,
+    f.covered_seconds, f.muted_overlap_s,
+    cf.chat_score, cf.audio_score, cf.twitch_clip_score, cf.motion_seconds, cf.total_score,
+    cf.speech_seconds, cf.word_count, cf.language AS speech_language, cf.language_probability
+    FROM clips c LEFT JOIN clip_ratings r ON r.clip_id=c.id
+    LEFT JOIN live_bursts b ON b.clip_id=c.id
+    LEFT JOIN burst_features f ON f.stream_id=b.stream_id AND f.anchor=b.anchor
+    LEFT JOIN clip_features cf ON cf.clip_id=c.id
+    ORDER BY c.created, c.id"""
+
+
+def _rating_rows(config: Config) -> list[dict]:
     with connect(config.paths.database) as db:
-        rows = db.execute("""SELECT c.id, c.streamer, c.path, c.start, c.duration,
-            c.transcript, r.score, r.notes, b.anchor, b.messages, b.game_name,
-            f.baseline_per_10s, f.observed_seconds, f.multiplier, f.minimum_messages,
-            f.warmup_seconds, b.messages / NULLIF(f.baseline_per_10s, 0) AS spike_ratio
-            FROM clips c LEFT JOIN clip_ratings r ON r.clip_id=c.id
-            LEFT JOIN live_bursts b ON b.clip_id=c.id
-            LEFT JOIN burst_features f ON f.stream_id=b.stream_id AND f.anchor=b.anchor
-            ORDER BY c.created, c.id""").fetchall()
+        return [dict(row) for row in db.execute(RATINGS_QUERY)]
+
+
+def export_ratings(config: Config, destination: Path):
+    """Write clips, ratings and every recorded feature as JSON, or CSV for a .csv destination."""
+    rows = _rating_rows(config)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps([dict(row) for row in rows], indent=2), encoding="utf-8")
+    if destination.suffix.lower() == ".csv":
+        with destination.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]) if rows else ["id"])
+            writer.writeheader()
+            writer.writerows(rows)
+    else:
+        destination.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(f"Exported {len(rows)} clips and ratings to {destination.resolve()}")
+
+
+def _ranks(values: list[float]) -> list[float]:
+    order = sorted(range(len(values)), key=values.__getitem__)
+    ranks = [0.0] * len(values)
+    index = 0
+    while index < len(order):
+        end = index
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[index]]:
+            end += 1
+        for position in range(index, end + 1):
+            ranks[order[position]] = (index + end) / 2 + 1
+        index = end + 1
+    return ranks
+
+
+def spearman(xs: list[float], ys: list[float]) -> float | None:
+    """Rank correlation with tie handling, or None when it is undefined."""
+    if len(xs) < 3:
+        return None
+    rx, ry = _ranks(xs), _ranks(ys)
+    mx, my = sum(rx) / len(rx), sum(ry) / len(ry)
+    covariance = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    spread = math.sqrt(sum((a - mx) ** 2 for a in rx) * sum((b - my) ** 2 for b in ry))
+    return covariance / spread if spread else None
+
+
+SUMMARY_FEATURES = ("spike_ratio", "messages", "unique_chatters", "peak_messages", "viewer_count",
+                    "stream_age_s", "muted_overlap_s", "chat_score", "audio_score", "twitch_clip_score",
+                    "motion_seconds", "total_score", "speech_seconds", "word_count")
+SMALL_SAMPLE = 30
+
+
+def ratings_summary(config: Config) -> dict:
+    """Describe how ratings relate to recorded features. Descriptive only; nothing is trained."""
+    rated = [row for row in _rating_rows(config) if row["score"] is not None]
+    summary = {"rated": len(rated), "by_source": {}, "by_streamer": {}, "correlations": {}}
+
+    def group(key):
+        groups = {}
+        for row in rated:
+            groups.setdefault(row[key] or "unknown", []).append(row["score"])
+        return {name: {"n": len(scores), "mean": round(sum(scores) / len(scores), 2)}
+                for name, scores in sorted(groups.items(), key=lambda item: -len(item[1]))}
+
+    summary["by_source"] = group("source")
+    summary["by_streamer"] = group("streamer")
+    for feature in SUMMARY_FEATURES:
+        pairs = [(row[feature], row["score"]) for row in rated if row[feature] is not None]
+        rho = spearman([x for x, _ in pairs], [y for _, y in pairs])
+        if rho is None:
+            continue
+        quartiles = {}
+        if len(pairs) >= 8:
+            ordered = sorted(pairs)
+            for quarter in range(4):
+                part = ordered[quarter * len(ordered) // 4:(quarter + 1) * len(ordered) // 4]
+                quartiles[f"Q{quarter + 1}"] = round(sum(y for _, y in part) / len(part), 2)
+        summary["correlations"][feature] = {"n": len(pairs), "spearman": round(rho, 3),
+                                            "mean_score_by_quartile": quartiles}
+    return summary
+
+
+def print_ratings_summary(config: Config):
+    summary = ratings_summary(config)
+    print(f'{summary["rated"]} rated clips')
+    if summary["rated"] < SMALL_SAMPLE:
+        print(f"Warning: with under {SMALL_SAMPLE} ratings, these numbers are mostly noise.")
+    for title, key in (("By source", "by_source"), ("By streamer", "by_streamer")):
+        print(f"\n{title}")
+        for name, values in list(summary[key].items())[:15]:
+            print(f'  {name:<24} n={values["n"]:<4} mean={values["mean"]}')
+    print("\nSpearman correlation with score (descriptive, not causal)")
+    for feature, values in summary["correlations"].items():
+        flag = "  (small n)" if values["n"] < SMALL_SAMPLE else ""
+        quartiles = " ".join(f"{k}={v}" for k, v in values["mean_score_by_quartile"].items())
+        print(f'  {feature:<18} rho={values["spearman"]:+.3f} n={values["n"]}{flag}  {quartiles}')
 
 
 def get_clip(db, clip_id: str):

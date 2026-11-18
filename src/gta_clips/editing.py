@@ -1,12 +1,14 @@
 """Render vertical video, Twitch credit, and Whisper captions with FFmpeg."""
 
 from pathlib import Path
-import subprocess
+import logging
+import time
 
 import av
 
 from .captions import Transcriber, write_ass
 from .config import EditingConfig, Crop
+from .diagnostics import CommandFailed, run
 from .download import ffmpeg_binary
 from .highlights import Moment
 
@@ -28,44 +30,80 @@ def _fill(height: int) -> str:
             f"crop=1080:{height},setsar=1")
 
 
+def video_duration(path: Path) -> float:
+    """Length of the first video stream, which (unlike the container) ignores longer audio."""
+    with av.open(str(path)) as media:
+        stream = media.streams.video[0]
+        if stream.duration is not None and stream.time_base is not None:
+            return float(stream.duration * stream.time_base)
+        if stream.frames and stream.average_rate:
+            return float(stream.frames / stream.average_rate)
+        return media.duration / av.time_base
+
+
+def max_source_height(settings: EditingConfig) -> int | None:
+    """The fit layout shrinks a landscape frame to 1080 px wide, so 720p sources are enough."""
+    return 720 if settings.layout == "fit" else None
+
+
+FRAME_TOLERANCE = 1.5 / 30
+
+
 def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
-    settings: EditingConfig, transcriber: Transcriber,
+    settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
 ) -> str:
+    """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts."""
     ffmpeg = ffmpeg_binary()
     audio = working / "speech.wav"
-    input_args = ["-ss", str(moment.start), "-i", str(source), "-t", str(moment.duration)]
-    probe_audio = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
-         "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)],
-        capture_output=True, text=True, timeout=180,
-    )
-    if probe_audio.returncode and "matches no streams" in probe_audio.stderr:
-        words = []
-    else:
-        probe_audio.check_returncode()
+    # Output-side -ss/-t decode from the previous keyframe and cut on the exact frame.
+    input_args = ["-i", str(source), "-ss", str(moment.start), "-t", str(moment.duration)]
+    began = time.monotonic()
+    try:
+        run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
+             "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)],
+            timeout=180, low_priority=True)
         words = transcriber.transcribe(audio)
+    except CommandFailed as error:
+        if "matches no streams" not in (error.stderr or ""):
+            raise
+        words = []
+    transcribed = time.monotonic()
     write_ass(working / "captions.ass", words, streamer, moment.duration)
     split = settings.streamers.get(streamer) if settings.layout == "split" else None
+    # Dropping to 30 fps first halves the scaling work for 60 fps sources.
     if split:
-        layout = (f"[0:v]split[face_src][game_src];[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
+        layout = (f"[0:v]fps=30,split[face_src][game_src];"
+                  f"[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
                   f"[game_src]{_crop(split.gameplay)}{_fill(1200)}[game];[face][game]vstack")
     elif settings.layout == "fit":
         # Preserve every edge, with spare vertical space for captions and credit.
-        layout = ("[0:v]scale=1080:1920:force_original_aspect_ratio=decrease:"
+        layout = ("[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:"
                   "force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
     else:
-        layout = f"[0:v]{_fill(1920)}"
-    filters = f"{layout},fps=30,ass=captions.ass[video]"
+        layout = f"[0:v]fps=30,{_fill(1920)}"
+    filters = f"{layout},ass=captions.ass[video]"
     temporary = working / "rendered.mp4"
-    subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
+    run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
          "-filter_complex_threads", "2", "-filter_complex", filters, "-map", "[video]",
          "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
          "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
          str(temporary)],
-        cwd=working, check=True, timeout=600,
-    )
+        cwd=working, timeout=600, low_priority=True)
+    encoded = time.monotonic()
+    rendered = video_duration(temporary)
+    if abs(rendered - moment.duration) > FRAME_TOLERANCE:
+        raise ValueError(f"Rendered clip is {rendered:.2f}s, expected {moment.duration}s; "
+                         "the source does not cover the full window yet")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary.replace(target)
+    if details is not None:
+        details.update(
+            transcribe_seconds=round(transcribed - began, 2), encode_seconds=round(encoded - transcribed, 2),
+            word_count=len(words), speech_seconds=round(sum(w.end - w.start for w in words), 2),
+            language=getattr(transcriber, "language", None) if words else None,
+            language_probability=getattr(transcriber, "language_probability", None) if words else None,
+        )
+    logging.info("Rendered %s: transcribe %.1fs, encode %.1fs", target.name,
+                 transcribed - began, encoded - transcribed)
     return " ".join(word.text for word in words)

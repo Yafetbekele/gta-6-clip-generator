@@ -42,7 +42,8 @@ def _run_one(config: Config, platform: str) -> bool:
                       uploads.visibility, uploads.made_for_kids
                FROM uploads JOIN clips ON clips.id = uploads.clip_id
                WHERE uploads.platform=? AND uploads.state='queued' AND clips.state='approved'
-               ORDER BY clips.created, clips.id LIMIT 1""", (platform,),
+                     AND uploads.retry_at <= ?
+               ORDER BY clips.created, clips.id LIMIT 1""", (platform, now),
         ).fetchone()
     if job is None or job["retry_at"] > now:
         return True
