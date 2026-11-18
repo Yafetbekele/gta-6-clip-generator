@@ -13,7 +13,7 @@ from gta_clips.config import LiveConfig, PathsConfig, load_config
 from gta_clips.db import connect
 from gta_clips.diagnostics import CommandFailed
 from gta_clips.download import VodUnavailable
-from gta_clips.live import (Broadcast, ChatRate, _chat_event, _sync_subscriptions, choose_channels,
+from gta_clips.live import (Broadcast, ChatRate, required_unique, _chat_event, _sync_subscriptions, choose_channels,
                             record_burst)
 from gta_clips.live_render import muted_overlap, render_due, retry_delay
 
@@ -70,6 +70,28 @@ class ChatRateTest(unittest.TestCase):
         crowd = ChatRate()
         counts = [crowd.observe(1000 + index / 10, settings, f"user{index % 8}") for index in range(40)]
         self.assertGreater(max(counts), 0)
+
+    def test_without_a_floor_a_burst_is_relative_to_the_baseline(self):
+        settings = LiveConfig(warmup_seconds=0, messages_per_10_seconds=0, spike_multiplier=4.0,
+                              min_unique_chatters=6)
+        self.assertEqual(required_unique(settings), 6)
+        rate = ChatRate()
+        # A quiet chat: one message every 5 seconds for 5 minutes is 2 per 10 s.
+        for index in range(60):
+            self.assertEqual(rate.observe(1000 + index * 5, settings, f"regular{index % 3}"), 0)
+        # 10 messages from 8 people in a few seconds is 5x normal; 15 messages used to be required.
+        counts = [rate.observe(1300 + index * 0.3, settings, f"viewer{index % 8}") for index in range(10)]
+        self.assertGreater(max(counts), 0)
+        self.assertLess(max(counts), 15)
+
+    def test_without_a_floor_few_chatters_still_cannot_trigger(self):
+        settings = LiveConfig(warmup_seconds=0, messages_per_10_seconds=0, spike_multiplier=4.0,
+                              min_unique_chatters=6)
+        rate = ChatRate()
+        for index in range(60):
+            rate.observe(1000 + index * 5, settings, f"regular{index % 3}")
+        counts = [rate.observe(1300 + index * 0.3, settings, f"viewer{index % 3}") for index in range(20)]
+        self.assertEqual(max(counts), 0)
 
     def test_late_message_lands_at_its_own_time(self):
         rate = ChatRate()

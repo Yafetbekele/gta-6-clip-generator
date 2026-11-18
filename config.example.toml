@@ -24,11 +24,11 @@ require_motion = true
 [live]
 warmup_seconds = 300
 max_channels = 15
-messages_per_10_seconds = 15
-spike_multiplier = 3.0
-cooldown_seconds = 120
-# A burst also needs this many different chatters (capped at messages_per_10_seconds).
-min_unique_chatters = 5
+# A burst is chat at this multiple of the channel's rate over the last 5 minutes.
+spike_multiplier = 4.0
+cooldown_seconds = 900
+# A burst also needs this many different chatters in those 10 seconds.
+min_unique_chatters = 12
 # Bot accounts whose messages are not counted. Setting this replaces the default list.
 # ignored_chatters = ["nightbot", "streamelements", "moobot", "fossabot", "streamlabs"]
 # Comparison windows, rendered and rated like bursts. 0 turns either one off.

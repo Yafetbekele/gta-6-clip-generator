@@ -85,6 +85,9 @@ class SettingsEditTest(TempConfig):
         self.assertIn("[editing]\nfps = 30", result)
         added = set_value(result, "live", "cooldown_seconds", 120)
         self.assertLess(added.index("cooldown_seconds = 120"), added.index("[editing]"))
+        # A new key goes after the last setting, not under the next table's comment.
+        spaced = set_value("[live]\nmax_channels = 5\n\n# About editing\n[editing]\n", "live", "warmup_seconds", 0)
+        self.assertEqual(spaced, "[live]\nmax_channels = 5\nwarmup_seconds = 0\n\n# About editing\n[editing]\n")
         table = set_value(added, "runtime", "watch_days", ["fri", "sat"])
         self.assertTrue(table.endswith('[runtime]\nwatch_days = ["fri", "sat"]\n'))
 

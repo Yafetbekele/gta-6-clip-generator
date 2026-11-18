@@ -122,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                      else ", ".join(config.twitch.streamers) or "none configured")
         print(f"Twitch discovery: {streamers}")
         print(f"Live chat watcher: up to {config.live.max_channels} channels, "
-              f"{config.live.messages_per_10_seconds} messages/10s minimum (run watch-live to start)")
+              f"bursts at {config.live.spike_multiplier:g}x the normal chat rate (run watch-live to start)")
         print(f"Storage: {config.paths.data_dir}")
         print(f"Enabled posting destinations: {', '.join(destinations) or 'none'}")
         return 0

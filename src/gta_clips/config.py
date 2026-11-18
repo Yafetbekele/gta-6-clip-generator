@@ -83,7 +83,8 @@ DEFAULT_IGNORED_CHATTERS = ("nightbot", "streamelements", "moobot", "fossabot", 
 class LiveConfig:
     warmup_seconds: int = 300
     max_channels: int = 15
-    messages_per_10_seconds: int = 15
+    # 0 means no absolute floor: a burst is judged only against the channel's normal rate.
+    messages_per_10_seconds: int = 0
     spike_multiplier: float = 3.0
     cooldown_seconds: int = 120
     # A burst also needs this many different chatters, so one spammer can't trigger it.
@@ -300,7 +301,7 @@ def _live(raw: object) -> LiveConfig:
         warmup_seconds=_integer(options.get("warmup_seconds", 300), "live.warmup_seconds", 0),
         max_channels=_integer(options.get("max_channels", defaults.max_channels), "live.max_channels", 1, 20),
         messages_per_10_seconds=_integer(options.get("messages_per_10_seconds", defaults.messages_per_10_seconds),
-                                         "live.messages_per_10_seconds", 1),
+                                         "live.messages_per_10_seconds", 0),
         spike_multiplier=multiplier,
         cooldown_seconds=_integer(options.get("cooldown_seconds", defaults.cooldown_seconds),
                                   "live.cooldown_seconds", 60),

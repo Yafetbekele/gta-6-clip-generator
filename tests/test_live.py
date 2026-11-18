@@ -66,11 +66,12 @@ class LiveTest(unittest.TestCase):
 
     def test_burst_persists_post_roll_and_cooldown(self):
         stream = Broadcast("12", "42", "streamer", 950)
-        self.assertFalse(record_burst(self.config, stream, 970, 15))
-        self.assertTrue(record_burst(self.config, stream, 1000, 16, 4, 310))
-        self.assertFalse(record_burst(self.config, stream, 1100, 20))
-        self.assertTrue(record_burst(self.config, stream, 1120, 17))
-        with connect(self.config.paths.database) as db:
+        config = replace(self.config, live=replace(self.config.live, cooldown_seconds=120))
+        self.assertFalse(record_burst(config, stream, 970, 15))
+        self.assertTrue(record_burst(config, stream, 1000, 16, 4, 310))
+        self.assertFalse(record_burst(config, stream, 1100, 20))
+        self.assertTrue(record_burst(config, stream, 1120, 17))
+        with connect(config.paths.database) as db:
             rows = db.execute("SELECT anchor, retry_at FROM live_bursts ORDER BY anchor").fetchall()
             feature = db.execute("SELECT baseline_per_10s, observed_seconds, warmup_seconds "
                                  "FROM burst_features WHERE anchor=1000").fetchone()

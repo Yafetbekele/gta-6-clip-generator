@@ -39,12 +39,10 @@ SETTINGS = (
             group="What to watch"),
     Setting("live", "max_channels", "int", "Channels watched at once", "The most-viewed live channels, up to 20.",
             1, 20, "What to watch"),
-    Setting("live", "messages_per_10_seconds", "int", "Minimum messages in 10 seconds",
-            "A burst needs at least this many messages.", 1, 10000, "Burst detection"),
     Setting("live", "spike_multiplier", "float", "Times the normal chat rate",
-            "A burst needs this multiple of the channel's recent baseline.", 1, 100, "Burst detection"),
+            "A burst is judged only against the channel's normal rate over the last 5 minutes.", 1, 100, "Burst detection"),
     Setting("live", "min_unique_chatters", "int", "Different chatters needed",
-            "Stops one spammer from triggering a clip.", 1, 1000, "Burst detection"),
+            "Stops a few people or one spammer from triggering a clip in a quiet chat.", 1, 1000, "Burst detection"),
     Setting("live", "cooldown_seconds", "int", "Seconds between clips per channel", "", 60, 86400,
             "Burst detection"),
     Setting("live", "warmup_seconds", "int", "Warmup before a channel can trigger (seconds)",
@@ -127,9 +125,12 @@ def set_value(text: str, table: str, key: str, value) -> str:
                 raise ConfigError(f"Edit {table}.{key} by hand; it spans several lines")
             lines[index] = entry
             return "\n".join(lines) + "\n"
-    insert = end
-    while insert > start + 1 and not lines[insert - 1].strip():
-        insert -= 1
+    # Add it after the table's last setting, so comments introducing the next table stay with it.
+    insert = start + 1
+    for index in range(start + 1, end):
+        stripped = lines[index].strip()
+        if stripped and not stripped.startswith("#"):
+            insert = index + 1
     lines.insert(insert, entry)
     return "\n".join(lines) + "\n"
 

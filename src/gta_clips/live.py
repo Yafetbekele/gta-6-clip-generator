@@ -160,7 +160,10 @@ class ChatRate:
 
 
 def required_unique(config: LiveConfig) -> int:
-    return min(config.min_unique_chatters, config.messages_per_10_seconds)
+    # With a message floor set, the chatter rule cannot ask for more people than messages.
+    if config.messages_per_10_seconds:
+        return min(config.min_unique_chatters, config.messages_per_10_seconds)
+    return config.min_unique_chatters
 
 
 class ChatBuckets:
