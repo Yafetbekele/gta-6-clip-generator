@@ -249,6 +249,12 @@ class DashboardTest(TempConfig):
         status, _ = request("POST", "/api/control", {"action": "format-disk"}, token=token)
         self.assertEqual(status, 400)
 
+    def test_second_dashboard_cannot_share_the_port(self):
+        first = dashboard.make_server(self.config, self.config_path, 0)
+        self.addCleanup(first.server_close)
+        with self.assertRaises(OSError):
+            dashboard.make_server(self.config, self.config_path, first.server_port).server_close()
+
     def test_control_writes_stop_files(self):
         data = self.folder / "data"
         data.mkdir(parents=True, exist_ok=True)

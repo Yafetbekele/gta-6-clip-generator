@@ -236,9 +236,15 @@ def make_server(config: Config, config_path: Path, port: int = 8766):
                 return self.reply(500, {"error": f"Could not complete that: {error.strerror or error}"})
             self.reply(404, {"error": "Not found"})
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = _Server(("127.0.0.1", port), Handler)
     server.daemon_threads = True
     return server
+
+
+class _Server(ThreadingHTTPServer):
+    # On Windows, address reuse lets a second dashboard bind the same port, and the two then
+    # split requests with different tokens. Refusing the bind makes the second launch reuse the first.
+    allow_reuse_address = sys.platform != "win32"
 
 
 def serve(config: Config, config_path: Path, port: int = 8766, open_browser: bool = False):
