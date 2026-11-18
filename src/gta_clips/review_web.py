@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, unquote
 import json
+import hashlib
 import re
 import secrets
 import webbrowser
@@ -49,10 +50,21 @@ def make_server(config: Config, port: int = 8765):
                 return self.reply(200, page.replace("__TOKEN__", token).encode(), "text/html; charset=utf-8")
             if path == "/api/clips":
                 with connect(config.paths.database) as db:
-                    rows = db.execute("""SELECT c.id,c.streamer,c.title,c.duration,c.created,
+                    rows = db.execute("""SELECT c.id,c.streamer,c.title,c.duration,c.created,c.path,
                         r.score,r.notes FROM clips c LEFT JOIN clip_ratings r ON r.clip_id=c.id
                         ORDER BY c.created DESC,c.id""").fetchall()
-                return self.reply(200, [dict(row) for row in rows])
+                clips = []
+                for row in rows:
+                    clip = dict(row)
+                    relative = clip.pop('path')
+                    clip['video_version'] = hashlib.sha256(relative.encode()).hexdigest()[:16]
+                    try:
+                        manifest = json.loads((config.paths.data_dir / relative).with_suffix('.edit.json').read_text(encoding='utf-8'))
+                        clip['hook'] = manifest.get('hook')
+                    except (OSError, ValueError, AttributeError):
+                        clip['hook'] = None
+                    clips.append(clip)
+                return self.reply(200, clips)
             if path.startswith("/video/"):
                 with connect(config.paths.database) as db:
                     row = db.execute("SELECT path FROM clips WHERE id=?", (unquote(path[7:]),)).fetchone()

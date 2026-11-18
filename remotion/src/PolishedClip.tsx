@@ -1,8 +1,33 @@
 import {AbsoluteFill, Interactive, interpolate, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {Video} from '@remotion/media';
 import type {Caption} from '@remotion/captions';
+import {fillTextBox} from '@remotion/layout-utils';
+import {useMemo} from 'react';
 
-export type ClipProps = {source: string; streamer: string; durationSeconds: number; captions: Caption[]};
+type HookData = {text: string; evidence: string; method: string};
+export type ClipProps = {source: string; streamer: string; durationSeconds: number; captions: Caption[]; hook?: HookData};
+
+const ContextText = ({hook}: {hook?: HookData}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const text = hook?.method === 'transcript_quote_v1' ? `“${hook.text}”` : hook?.text || '';
+  const fontSize = useMemo(() => {
+    for (let size = 60; size >= 32; size -= 2) {
+      const box = fillTextBox({maxBoxWidth: 820, maxLines: 3});
+      if (text.split(/\s+/).every((word) => !box.add({text: word + ' ', fontFamily: 'Arial',
+        fontWeight: '800', fontSize: size}).exceedsBox)) return size;
+    }
+    return 32;
+  }, [text]);
+  if (!hook?.text || frame >= 7 * fps) return null;
+  return <Interactive.Div name="Context hook" style={{position: 'absolute', top: 175, left: 90,
+    width: 820, fontSize, lineHeight: 1.15, fontWeight: 800, color: '#ffffff',
+    overflowWrap: 'anywhere',
+    opacity: interpolate(frame, [0, 0.3 * fps, 6.6 * fps, 7 * fps], [0, 1, 1, 0],
+      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>
+    {text}
+  </Interactive.Div>;
+};
 
 // Whisper captions are generated data, controlled as a single template layer.
 const WordCaptions = ({captions}: {captions: Caption[]}) => {
@@ -30,7 +55,7 @@ const Credit = ({streamer}: {streamer: string}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   return <Interactive.Div name="Streamer credit" style={{position: 'absolute', left: 90,
-    top: 390, width: 820, color: '#ffffff', fontSize: 44, fontWeight: 700, overflowWrap: 'anywhere',
+    top: 440, width: 820, color: '#ffffff', fontSize: 44, fontWeight: 700, overflowWrap: 'anywhere',
     opacity: interpolate(frame, [0, 0.35 * fps], [0, 1], {extrapolateRight: 'clamp'}),
     translate: interpolate(frame, [0, 0.35 * fps], ['0px 18px', '0px 0px'], {extrapolateRight: 'clamp'})}}>
     @{streamer} on Twitch
@@ -45,13 +70,14 @@ const Progress = () => {
     width: interpolate(frame, [0, durationInFrames - 1], [0, 1000], {extrapolateRight: 'clamp'})}} />;
 };
 
-export const PolishedClip = ({source, streamer, captions}: ClipProps) => (
+export const PolishedClip = ({source, streamer, captions, hook}: ClipProps) => (
   <AbsoluteFill style={{backgroundColor: '#0b0d16', fontFamily: 'Arial, sans-serif'}}>
     <Interactive.Div name="Backdrop" style={{position: 'absolute', inset: 0,
       background: 'radial-gradient(ellipse at 15% 35%, #30224f 0%, #101525 45%, #090b12 85%)'}} />
-    <Interactive.Div name="Source label" style={{position: 'absolute', left: 90, top: 310,
+    <Interactive.Div name="Source label" style={{position: 'absolute', left: 90, top: 110,
       fontSize: 26, letterSpacing: 6, color: '#c4ff58', fontWeight: 700}}>STREAM HIGHLIGHT</Interactive.Div>
     <Credit streamer={streamer} />
+    <ContextText hook={hook} />
     <div style={{position: 'absolute', left: 40, top: 560, width: 1000, height: 680,
       backgroundColor: '#000000', boxShadow: '0 30px 100px #00000080'}}>
       {source ? <Video name="Full stream frame" src={staticFile(source)}

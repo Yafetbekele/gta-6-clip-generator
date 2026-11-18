@@ -23,9 +23,14 @@ def _queue_parser(commands):
     ratings = actions.add_parser("ratings-export")
     ratings.add_argument("destination", type=Path, help="A .json or .csv file")
     actions.add_parser("ratings-summary", help="Describe how ratings relate to recorded features")
-    for action in ("show", "preview", "edit", "approve", "reject", "export", "rate"):
+    for action in ("show", "preview", "edit", "approve", "reject", "export", "rate", "hook"):
         subcommand = actions.add_parser(action)
         subcommand.add_argument("clip_id")
+        if action == "hook":
+            choice = subcommand.add_mutually_exclusive_group()
+            choice.add_argument("--text", help="Opening overlay, at most 72 characters")
+            choice.add_argument("--clear", action="store_true", help="Remove the context overlay")
+            subcommand.add_argument("--suggest-only", action="store_true", help="Show a suggestion without rendering")
         if action == "rate":
             subcommand.add_argument("score", type=int, choices=range(1, 6))
             subcommand.add_argument("--notes", default="")
@@ -43,7 +48,10 @@ def _queue_parser(commands):
 
 
 def _review(config, args):
-    if args.action == "rate":
+    if args.action == "hook":
+        from .hook_edit import edit_hook
+        edit_hook(config, args.clip_id, '' if args.clear else args.text, suggest_only=args.suggest_only)
+    elif args.action == "rate":
         review.rate(config, args.clip_id, args.score, args.notes)
     elif args.action == "ratings-export":
         review.export_ratings(config, args.destination)

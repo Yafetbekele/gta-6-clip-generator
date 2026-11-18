@@ -35,6 +35,33 @@ On macOS or Linux, use `.venv/bin/python` and `.venv/bin/gta-clips`, and use `cp
 
 ### Optional Remotion polish
 
+New Remotion clips automatically select a short opening quote from the whole
+transcript, rather than always taking its first sentence. The local extractive
+selector skips common greetings and subscription messages, preserves wording
+(including negation), and omits the overlay when it cannot find a suitable short
+quote. It is a heuristic, not visual understanding or an AI-written summary;
+Whisper errors and context-dependent quotes still need review. The overlay lasts
+up to seven seconds and stays above the video, separate from speech captions.
+Its text, source quote, and caption timings are saved beside the MP4 in `.edit.json`.
+The review page displays the actual opening text when this manifest is available.
+
+For an existing pending clip:
+
+```text
+gta-clips queue hook CLIP_ID --suggest-only
+gta-clips queue hook CLIP_ID
+gta-clips queue hook CLIP_ID --text "Your edited context, up to 72 characters"
+gta-clips queue hook CLIP_ID --clear
+```
+
+Only `--suggest-only` avoids rendering. The other commands fetch the original VOD
+window and render a new Remotion version, so its VOD must still be available.
+The original video and ratings remain saved, and the queue switches to the new
+video only after success. Approved clips or clips with upload records cannot be
+re-edited this way. Preview the replacement before approving it. Refresh the review
+page to load the new video. Editing the publishing title does not change burned-in
+text. Existing clips are never rebuilt automatically by this feature.
+
 The `remotion/` project adds a full-frame 1080×1920 composition with an animated
 Twitch credit, a dark gradient background, a progress line, and readable active-word
 captions. It preserves the original audio and the exact selected window. It does

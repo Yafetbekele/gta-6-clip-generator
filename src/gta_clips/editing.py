@@ -1,6 +1,7 @@
 """Render vertical video, Twitch credit, and Whisper captions with FFmpeg."""
 
 from pathlib import Path
+import json
 import logging
 import time
 
@@ -52,6 +53,7 @@ FRAME_TOLERANCE = 1.5 / 30
 def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
     settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
+    *, hook_text: str | None = None,
 ) -> str:
     """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts."""
     ffmpeg = ffmpeg_binary()
@@ -72,7 +74,7 @@ def render(
     if settings.renderer == "remotion":
         from .remotion_render import render_polished
         temporary = working / "rendered.mp4"
-        render_polished(source, working, temporary, moment, streamer, words, ffmpeg)
+        render_polished(source, working, temporary, moment, streamer, words, ffmpeg, hook_text)
     else:
         write_ass(working / "captions.ass", words, streamer, moment.duration)
         split = settings.streamers.get(streamer) if settings.layout == "split" else None
@@ -101,6 +103,12 @@ def render(
         raise ValueError(f"Rendered clip is {rendered:.2f}s, expected {moment.duration}s; "
                          "the source does not cover the full window yet")
     target.parent.mkdir(parents=True, exist_ok=True)
+    if settings.renderer == "remotion":
+        # Keep editable text and timing, not the raw video that is cleaned after rendering.
+        manifest = json.loads((working / "remotion-job.json").read_text(encoding="utf-8"))
+        manifest.pop("source", None)
+        manifest["schema_version"] = 1
+        target.with_suffix('.edit.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(target)
     if details is not None:
         details.update(

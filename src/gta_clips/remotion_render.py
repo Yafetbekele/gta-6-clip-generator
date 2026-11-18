@@ -8,6 +8,7 @@ import shutil
 
 from .captions import Word
 from .diagnostics import run
+from .context_text import manual_hook, suggest_hook
 
 
 def caption_data(words: list[Word], duration: float) -> list[dict]:
@@ -24,7 +25,8 @@ def caption_data(words: list[Word], duration: float) -> list[dict]:
 
 
 def render_polished(source: Path, working: Path, target: Path, moment, streamer: str,
-                    words: list[Word], ffmpeg: str):
+                    words: list[Word], ffmpeg: str, hook_text: str | None = None):
+    hook = suggest_hook(' '.join(word.text for word in words)) if hook_text is None else manual_hook(hook_text)
     project = Path(os.environ.get("REMOTION_PROJECT", Path(__file__).resolve().parents[2] / "remotion")).resolve()
     node = shutil.which("node")
     if not node or not (project / "node_modules" / "@remotion" / "renderer").exists():
@@ -45,6 +47,7 @@ def render_polished(source: Path, working: Path, target: Path, moment, streamer:
     job = working.resolve() / "remotion-job.json"
     job.write_text(json.dumps({"source": "source.mp4", "streamer": streamer,
                               "durationSeconds": moment.duration,
+                              "hook": hook.to_dict(),
                               "captions": caption_data(words, moment.duration)}, ensure_ascii=False), encoding="utf-8")
     run([node, str(project / "render.mjs"), str(job), str(assets), str(target.resolve())],
         cwd=project, timeout=1800, low_priority=True)

@@ -9,7 +9,9 @@ export const RemotionRoot = () => <Composition
       throw new Error('Clip duration must be greater than 0 and at most 60 seconds');
     return {durationInFrames: Math.round(props.durationSeconds * 30)};
   }}
-  defaultProps={{source: '', streamer: 'streamer', durationSeconds: 60, captions: [
+  defaultProps={{source: '', streamer: 'streamer', durationSeconds: 60,
+    hook: {text: 'I accidentally booked the flight for next year.',
+      evidence: 'I accidentally booked the flight for next year.', method: 'transcript_quote_v1'}, captions: [
     {text: 'Readable', startMs: 0, endMs: 700, timestampMs: null, confidence: null},
     {text: 'word-by-word', startMs: 700, endMs: 1500, timestampMs: null, confidence: null},
     {text: 'captions', startMs: 1500, endMs: 2500, timestampMs: null, confidence: null},
