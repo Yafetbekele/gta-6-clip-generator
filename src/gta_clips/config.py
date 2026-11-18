@@ -67,6 +67,7 @@ class EditingConfig:
     layout: str
     whisper_model: str
     streamers: dict[str, SplitLayout]
+    renderer: str = "ffmpeg"
 
 
 @dataclass(frozen=True)
@@ -256,7 +257,12 @@ def _editing(raw: object) -> EditingConfig:
             facecam=_crop(rectangles.get("facecam"), f"{path}.facecam"),
             gameplay=_crop(rectangles.get("gameplay"), f"{path}.gameplay"),
         )
-    return EditingConfig(layout, _text(options.get("whisper_model", "base"), "editing.whisper_model"), layouts)
+    renderer = options.get("renderer", "ffmpeg")
+    if renderer not in ("ffmpeg", "remotion"):
+        raise ConfigError("editing.renderer must be 'ffmpeg' or 'remotion'")
+    if renderer == "remotion" and layout != "fit":
+        raise ConfigError("The Remotion renderer currently requires editing.layout = 'fit'")
+    return EditingConfig(layout, _text(options.get("whisper_model", "base"), "editing.whisper_model"), layouts, renderer)
 
 
 def _schedule(raw: object) -> dict[str, ScheduleConfig]:

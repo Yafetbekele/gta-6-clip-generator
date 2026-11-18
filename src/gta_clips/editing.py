@@ -69,27 +69,32 @@ def render(
             raise
         words = []
     transcribed = time.monotonic()
-    write_ass(working / "captions.ass", words, streamer, moment.duration)
-    split = settings.streamers.get(streamer) if settings.layout == "split" else None
-    # Dropping to 30 fps first halves the scaling work for 60 fps sources.
-    if split:
-        layout = (f"[0:v]fps=30,split[face_src][game_src];"
-                  f"[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
-                  f"[game_src]{_crop(split.gameplay)}{_fill(1200)}[game];[face][game]vstack")
-    elif settings.layout == "fit":
-        # Preserve every edge, with spare vertical space for captions and credit.
-        layout = ("[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:"
-                  "force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+    if settings.renderer == "remotion":
+        from .remotion_render import render_polished
+        temporary = working / "rendered.mp4"
+        render_polished(source, working, temporary, moment, streamer, words, ffmpeg)
     else:
-        layout = f"[0:v]fps=30,{_fill(1920)}"
-    filters = f"{layout},ass=captions.ass[video]"
-    temporary = working / "rendered.mp4"
-    run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
-         "-filter_complex_threads", "2", "-filter_complex", filters, "-map", "[video]",
-         "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
-         str(temporary)],
-        cwd=working, timeout=600, low_priority=True)
+        write_ass(working / "captions.ass", words, streamer, moment.duration)
+        split = settings.streamers.get(streamer) if settings.layout == "split" else None
+        # Dropping to 30 fps first halves the scaling work for 60 fps sources.
+        if split:
+            layout = (f"[0:v]fps=30,split[face_src][game_src];"
+                      f"[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
+                      f"[game_src]{_crop(split.gameplay)}{_fill(1200)}[game];[face][game]vstack")
+        elif settings.layout == "fit":
+            # Preserve every edge, with spare vertical space for captions and credit.
+            layout = ("[0:v]fps=30,scale=1080:1920:force_original_aspect_ratio=decrease:"
+                      "force_divisible_by=2,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1")
+        else:
+            layout = f"[0:v]fps=30,{_fill(1920)}"
+        filters = f"{layout},ass=captions.ass[video]"
+        temporary = working / "rendered.mp4"
+        run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
+             "-filter_complex_threads", "2", "-filter_complex", filters, "-map", "[video]",
+             "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+             str(temporary)],
+            cwd=working, timeout=600, low_priority=True)
     encoded = time.monotonic()
     rendered = video_duration(temporary)
     if abs(rendered - moment.duration) > FRAME_TOLERANCE:

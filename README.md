@@ -33,6 +33,35 @@ On macOS or Linux, use `.venv/bin/python` and `.venv/bin/gta-clips`, and use `cp
 
 ## Create and review clips
 
+### Optional Remotion polish
+
+The `remotion/` project adds a full-frame 1080×1920 composition with an animated
+Twitch credit, a dark gradient background, a progress line, and readable active-word
+captions. It preserves the original audio and the exact selected window. It does
+not add music, change the selected moment, or publish clips.
+
+Install Node.js 22.13+ (or 24+) and run `npm ci` inside `remotion/`. Run
+`npm run dev` there to preview and edit `PolishedClip` in Remotion Studio.
+The default Studio view is a layout demonstration; production footage and Whisper
+captions arrive through JSON props. Generated captions are one programmatic layer,
+not individually source-editable Studio caption items.
+
+To use it for new clips, set `renderer = "remotion"` and `layout = "fit"` under
+`[editing]` in `config.toml`, then restart the watcher/worker. Existing clips and
+ratings stay unchanged. Use `renderer = "ffmpeg"` to restore the original renderer.
+The Remotion dependencies and bundled browser must be available to the worker's
+Windows account. Its first render may download the browser. If installed outside
+this source checkout, set `REMOTION_PROJECT` to the absolute `remotion/` directory.
+An optional `REMOTION_LICENSE_KEY` environment variable is forwarded to renders.
+
+Python trims an uncaptioned intermediate, reuses Whisper word timings, invokes the
+Node renderer with a 30-minute timeout, validates the output duration, and only
+then adds the video to the existing review workflow. Errors go through the existing
+retry system; it never silently substitutes a different renderer. Remotion needs
+more CPU and disk than FFmpeg alone. Temporary footage is cleaned by the normal
+pipeline work-directory cleanup. This first version supports the full-frame `fit`
+layout; `split` and `gameplay` remain available with FFmpeg.
+
 ```text
 gta-clips ingest
 gta-clips queue list

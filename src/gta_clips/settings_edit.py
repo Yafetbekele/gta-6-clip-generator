@@ -23,6 +23,9 @@ class Setting:
 
 
 SETTINGS = (
+    Setting("editing", "renderer", "text", "Clip renderer",
+            "ffmpeg or remotion. Remotion adds animated styling and requires the fit layout. Restart the watcher after saving.",
+            group="Video editing"),
     Setting("runtime", "watch_days", "days", "Days to watch", "Days when the live watcher runs.",
             group="Schedule"),
     Setting("runtime", "watch_start", "time", "Start watching at", "Local time. Use 00:00 to 24:00 for all day.",
@@ -62,7 +65,7 @@ BY_NAME = {f"{setting.table}.{setting.key}": setting for setting in SETTINGS}
 
 def current_values(config: Config) -> dict:
     sections = {"runtime": config.runtime, "twitch": config.twitch, "live": config.live,
-                "highlights": config.highlights}
+                "highlights": config.highlights, "editing": config.editing}
     values = {}
     for name, setting in BY_NAME.items():
         value = getattr(sections[setting.table], setting.key)

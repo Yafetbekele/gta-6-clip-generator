@@ -51,6 +51,7 @@ ingest_every_minutes = 0
 publish_every_minutes = 0
 
 [editing]
+renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Requires layout="fit".
 layout = "fit"
 whisper_model = "base"
 
