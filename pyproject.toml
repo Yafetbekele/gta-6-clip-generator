@@ -28,4 +28,4 @@ gta-clips = "gta_clips.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gta_clips = ["review_web.html"]
+gta_clips = ["review_web.html", "dashboard.html"]
