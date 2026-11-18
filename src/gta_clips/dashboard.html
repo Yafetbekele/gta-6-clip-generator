@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Generator Dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --accent-ink: #ffffff;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --good: #0ca30c; --good-ink: #006300; --warning: #fab219; --critical: #d03b3b;
+  --focus: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --good-ink: #0ca30c; --focus: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232322;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --good-ink: #0ca30c; --focus: #3987e5;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
+  padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--surface); }
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+.sub { color: var(--ink-2); margin: 2px 0 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button, select, input { font: inherit; color: inherit; }
+button { border: 1px solid var(--border); background: var(--surface-2); padding: 6px 12px; border-radius: 8px;
+  cursor: pointer; }
+button:hover { border-color: var(--axis); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.good { background: var(--good); } .dot.warning { background: var(--warning); }
+.dot.critical { background: var(--critical); }
+nav { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--surface);
+  overflow-x: auto; }
+nav a { padding: 10px 12px; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent;
+  white-space: nowrap; }
+nav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+main { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+section.tab { display: none; } section.tab.active { display: block; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.card { margin-bottom: 16px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.muted { color: var(--muted); } .small { font-size: 12px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; }
+td.wrap { white-space: normal; min-width: 220px; color: var(--ink-2); }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--surface-2);
+  border: 1px solid var(--border); }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--muted); font-size: 11px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 8px; color: var(--ink-2); font-size: 12px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  margin-right: 6px; background: var(--c); vertical-align: -1px; }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0,0,0,.12); border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap;
+  display: none; z-index: 2; color: var(--ink); }
+.tooltip b { font-variant-numeric: tabular-nums; }
+details { margin-top: 8px; color: var(--ink-2); font-size: 12px; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.banner { padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; border: 1px solid var(--border);
+  background: var(--surface); display: none; }
+.banner.show { display: block; }
+form.settings fieldset { border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  padding: 12px 16px 6px; margin: 0 0 16px; }
+form.settings legend { font-weight: 600; padding: 0 6px; }
+.field { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 4px 16px;
+  padding: 10px 0; border-bottom: 1px solid var(--grid); align-items: center; }
+.field:last-child { border-bottom: 0; }
+.field label { font-weight: 500; } .field .help { grid-column: 2; color: var(--muted); font-size: 12px; }
+.field input[type=number], .field input[type=text], .field input[type=time] { width: 180px; padding: 6px 8px;
+  border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); }
+.days { display: flex; gap: 6px; flex-wrap: wrap; }
+.days label { font-weight: 400; display: inline-flex; gap: 4px; align-items: center; padding: 3px 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.save-bar { display: flex; gap: 12px; align-items: center; position: sticky; bottom: 0; padding: 12px 0;
+  background: var(--page); }
+@media (max-width: 640px) {
+  header, main, nav { padding-left: 16px; padding-right: 16px; }
+  .field { grid-template-columns: 1fr; } .field .help { grid-column: 1; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Clip generator</h1>
+    <p class="sub" id="subtitle">Loading…</p>
+  </div>
+  <div class="controls">
+    <span class="pill" id="runner-pill"><span class="dot"></span><span>Schedule</span></span>
+    <span class="pill" id="watcher-pill"><span class="dot"></span><span>Watcher</span></span>
+    <button class="primary" id="start">Start schedule</button>
+    <button id="stop">Stop schedule</button>
+    <button id="review">Rate clips</button>
+  </div>
+</header>
+<nav aria-label="Sections">
+  <a href="#overview">Overview</a><a href="#streamers">Streamers</a><a href="#activity">Activity</a><a href="#settings">Settings</a>
+</nav>
+<main>
+  <div class="banner" id="banner" role="status" aria-live="polite"></div>
+
+  <section class="tab" id="tab-overview">
+    <div class="tiles" id="tiles"></div>
+    <div class="card">
+      <div class="card-head"><h2>Watching now</h2><span class="muted small" id="watching-note"></span></div>
+      <div class="table-wrap"><table id="channels"></table></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-head"><h2>Viewers in watched channels</h2><span class="muted small">Last 24 hours</span></div>
+        <div class="chart" id="chart-viewers"></div></div>
+      <div class="card"><div class="card-head"><h2>Chat messages per minute</h2><span class="muted small">Watched channels, last hour</span></div>
+        <div class="chart" id="chart-chat"></div></div>
+    </div>
+    <div class="card"><div class="card-head"><h2>Clip windows recorded per hour</h2><span class="muted small">Last 24 hours</span></div>
+      <div class="chart" id="chart-windows"></div></div>
+  </section>
+
+  <section class="tab" id="tab-streamers">
+    <div class="card">
+      <div class="card-head"><h2>Streamers in the last 7 days</h2>
+        <span class="muted small">Watch time comes from 5-minute snapshots, so it is approximate.</span></div>
+      <div class="table-wrap"><table id="streamers"></table></div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-activity">
+    <div class="card"><h2>Recent clip windows</h2><div class="table-wrap"><table id="recent"></table></div></div>
+    <div class="grid2">
+      <div class="card"><h2>Watcher runs</h2><div class="table-wrap"><table id="sessions"></table></div></div>
+      <div class="card"><h2>Streams that can't be clipped</h2>
+        <p class="muted small">Subscriber-only, private, or no VOD. These are skipped, never worked around.</p>
+        <div class="table-wrap"><table id="unavailable"></table></div></div>
+    </div>
+    <div class="card"><h2>Scheduled jobs</h2><div class="table-wrap"><table id="jobs"></table></div></div>
+  </section>
+
+  <section class="tab" id="tab-settings">
+    <form class="settings" id="settings-form" novalidate></form>
+  </section>
+</main>
+<div class="tooltip" id="tooltip" role="tooltip"></div>
+<script>
+const token = '__TOKEN__';
+const $ = id => document.getElementById(id);
+let data = null, settings = null, dirty = false;
+
+// ---------- formatting ----------
+const num = n => n === null || n === undefined ? '—' : Number(n).toLocaleString();
+const clock = t => new Date(t * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+const stamp = t => t ? new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '—';
+function ago(t) {
+  if (!t) return '—';
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+function span(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  const m = Math.round(seconds / 60);
+  return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+}
+const KINDS = {burst: 'Burst', near_miss: 'Near miss', control: 'Random control'};
+const STATES = {waiting: 'Waiting for VOD', queued: 'Clip ready', unavailable: 'Unavailable'};
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v; else if (k === 'text') node.textContent = v; else node.setAttribute(k, v);
+  }
+  for (const child of children) if (child !== null && child !== undefined)
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  return node;
+}
+
+function table(id, columns, rows, empty) {
+  const t = $(id); t.replaceChildren();
+  if (!rows.length) { t.append(el('tbody', {}, el('tr', {}, el('td', {class: 'empty', colspan: columns.length}, empty)))); return; }
+  t.append(el('thead', {}, el('tr', {}, ...columns.map(c => el('th', {class: c.num ? 'num' : ''}, c.label)))));
+  const body = el('tbody');
+  for (const row of rows) body.append(el('tr', {}, ...columns.map(c => el('td', {class: c.num ? 'num' : (c.wrap ? 'wrap' : '')}, c.value(row)))));
+  t.append(body);
+}
+
+// ---------- status & tiles ----------
+function pill(id, tone, text, title) {
+  const p = $(id); p.querySelector('.dot').className = 'dot ' + tone; p.querySelector('span:last-child').textContent = text;
+  p.title = title || '';
+}
+
+function renderStatus() {
+  const r = data.runner, w = data.watcher;
+  const running = r && r.fresh && r.state === 'running';
+  $('subtitle').textContent = data.game + ' · watch hours: ' + data.schedule + (data.in_window ? ' (now inside)' : ' (now outside)');
+  if (running) pill('runner-pill', 'good', 'Schedule running', 'Started ' + stamp(r.started));
+  else if (r && r.fresh && r.state === 'stopping') pill('runner-pill', 'warning', 'Schedule stopping');
+  else pill('runner-pill', '', 'Schedule off', 'Start it to run the watcher and jobs on the watch hours.');
+  if (w && w.fresh && w.state === 'watching') pill('watcher-pill', 'good', 'Watcher on', 'Updated ' + ago(w.updated));
+  else if (w && w.fresh && w.state !== 'stopped') pill('watcher-pill', 'warning', 'Watcher: ' + w.state);
+  else pill('watcher-pill', '', 'Watcher off', w ? 'Last seen ' + ago(w.updated) : 'Not run yet');
+  $('start').disabled = running; $('stop').disabled = !running;
+  const error = r && r.fresh && r.config_error;
+  if (error) banner('Settings problem, so the schedule kept the last good settings: ' + error);
+}
+
+function tile(label, value, note) {
+  return el('div', {class: 'tile'}, el('div', {class: 'label'}, label), el('div', {class: 'value'}, value), el('div', {class: 'note'}, note || ''));
+}
+
+function renderTiles() {
+  const t = data.totals;
+  $('tiles').replaceChildren(
+    tile('Channels watched now', t.watching_now + ' / ' + data.max_channels, data.channels.length ? '' : 'Watcher is not running'),
+    tile('Viewers across them', num(t.viewers_now), 'Sum of Twitch viewer counts'),
+    tile('Chat bursts today', num(t.bursts_today), num(t.windows_today) + (t.windows_today === 1 ? ' window' : ' windows') + ' incl. comparisons'),
+    tile('Waiting for a VOD', num(t.waiting_for_vod), 'Rendered once Twitch has the archive'),
+    tile('Clips to rate', num(t.unrated), num(t.clips) + ' clips in total'),
+    tile('Ratings', num(t.ratings), t.average_rating ? 'Average ' + t.average_rating + ' / 5' : 'No ratings yet'),
+  );
+}
+
+function renderChannels() {
+  const rows = [...data.channels].sort((a, b) => (a.rank || 99) - (b.rank || 99));
+  const w = data.watcher;
+  $('watching-note').textContent = w && w.fresh ? 'Updated ' + ago(w.updated) : '';
+  table('channels', [
+    {label: '#', num: true, value: r => r.rank || '—'},
+    {label: 'Streamer', value: r => el('a', {href: 'https://www.twitch.tv/' + encodeURIComponent(r.login), target: '_blank', rel: 'noopener'}, r.login)},
+    {label: 'Viewers', num: true, value: r => num(r.viewers)},
+    {label: 'Status', value: r => r.watching ? (r.warm ? 'Watching' : 'Warming up (' + span(r.covered_seconds) + ')')
+        : r.held_for_seconds ? 'Chat unavailable, retry in ' + span(r.held_for_seconds) : 'Connecting'},
+    {label: 'Chat now (10s)', num: true, value: r => r.watching ? num(r.messages_last_10s) : '—'},
+    {label: 'Normal (10s)', num: true, value: r => r.baseline_per_10s === null ? '—' : r.baseline_per_10s},
+    {label: 'Chatters (10s)', num: true, value: r => r.watching ? num(r.unique_last_10s) : '—'},
+    {label: 'Watching for', value: r => r.watching_since ? span(Date.now() / 1000 - r.watching_since) : '—'},
+    {label: 'Live for', value: r => r.live_since ? span(Date.now() / 1000 - r.live_since) : '—'},
+  ], rows, data.watcher && data.watcher.fresh ? 'No live channels in ' + data.game + ' right now.'
+    : 'The watcher is not running. Start the schedule, or run watch-live.');
+}
+
+// ---------- charts (inline SVG, one y-axis each) ----------
+const H = 220, M = {l: 48, r: 12, t: 10, b: 26};
+// Draw at the box's real width so text stays 11px and bars keep their shape.
+const chartWidth = box => Math.max(280, Math.round(box.clientWidth) || 640);
+// Four whole-number steps for counts, e.g. 0, 2, 4, 6, 8 rather than 0, 1.3, 2.5.
+function niceMax(v) {
+  const raw = Math.max(v, 1) / 4, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (Number.isInteger(m * p) && m * p >= raw) return 4 * m * p;
+  return 40 * p;
+}
+function axes(svg, max, xTicks, W) {
+  const ns = 'http://www.w3.org/2000/svg', g = document.createElementNS(ns, 'g');
+  for (let i = 0; i <= 4; i++) {
+    const y = M.t + (H - M.t - M.b) * (1 - i / 4);
+    const line = document.createElementNS(ns, 'line');
+    Object.entries({x1: M.l, x2: W - M.r, y1: y, y2: y, stroke: i ? 'var(--grid)' : 'var(--axis)', 'stroke-width': 1}).forEach(([k, v]) => line.setAttribute(k, v));
+    const label = document.createElementNS(ns, 'text');
+    Object.entries({x: M.l - 6, y: y + 4, 'text-anchor': 'end'}).forEach(([k, v]) => label.setAttribute(k, v));
+    label.textContent = (max * i / 4).toLocaleString(undefined, {maximumFractionDigits: 1});
+    g.append(line, label);
+  }
+  for (const [x, text] of xTicks) {
+    const label = document.createElementNS(ns, 'text');
+    Object.entries({x, y: H - 6, 'text-anchor': 'middle'}).forEach(([k, v]) => label.setAttribute(k, v));
+    label.textContent = text; g.append(label);
+  }
+  svg.append(g);
+}
+function svgEl(tag, attrs) { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; }
+// x and y are in the chart's own drawing units; the svg's on-screen box converts them to page pixels.
+function showTip(svg, W, x, y, html) {
+  const tip = $('tooltip'); tip.replaceChildren(...html); tip.style.display = 'block';
+  const r = svg.getBoundingClientRect();
+  const px = r.left + x * r.width / W, py = r.top + y * r.height / H;
+  const left = Math.min(px + 12, document.documentElement.clientWidth - tip.offsetWidth - 8);
+  const top = py - tip.offsetHeight - 10 < 0 ? py + 16 : py - tip.offsetHeight - 10;
+  tip.style.left = (window.scrollX + Math.max(8, left)) + 'px'; tip.style.top = (window.scrollY + top) + 'px';
+}
+function hideTip() { $('tooltip').style.display = 'none'; }
+function tableView(container, headers, rows) {
+  const details = el('details', {}, el('summary', {}, 'Show as table'));
+  const t = el('table'); t.append(el('thead', {}, el('tr', {}, ...headers.map(h => el('th', {}, h)))));
+  const body = el('tbody'); rows.forEach(r => body.append(el('tr', {}, ...r.map(v => el('td', {}, v))))); t.append(body);
+  details.append(el('div', {class: 'table-wrap'}, t)); container.append(details);
+}
+
+function lineChart(id, points, label, unit, xFormat, empty) {
+  const box = $(id); box.replaceChildren(); const W = chartWidth(box);
+  if (!points.length) { box.append(el('p', {class: 'empty'}, empty)); return; }
+  const xs = points.map(p => p.x), x0 = Math.min(...xs), x1 = Math.max(...xs, x0 + 1);
+  const max = niceMax(Math.max(...points.map(p => p.y)));
+  const sx = x => M.l + (W - M.l - M.r) * (x - x0) / (x1 - x0), sy = y => M.t + (H - M.t - M.b) * (1 - y / max);
+  const svg = svgEl('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label});
+  const ticks = [0, .25, .5, .75, 1].map(f => [sx(x0 + f * (x1 - x0)), xFormat(x0 + f * (x1 - x0))]);
+  axes(svg, max, ticks, W);
+  const d = points.map((p, i) => (i ? 'L' : 'M') + sx(p.x).toFixed(1) + ' ' + sy(p.y).toFixed(1)).join(' ');
+  svg.append(svgEl('path', {d, fill: 'none', stroke: 'var(--series-1)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'}));
+  const cross = svgEl('line', {y1: M.t, y2: H - M.b, stroke: 'var(--axis)', 'stroke-width': 1, visibility: 'hidden'});
+  const dot = svgEl('circle', {r: 4.5, fill: 'var(--series-1)', stroke: 'var(--surface)', 'stroke-width': 2, visibility: 'hidden'});
+  const hit = svgEl('rect', {x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: 'transparent'});
+  svg.append(cross, dot, hit);
+  hit.addEventListener('pointermove', e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width;
+    let best = points[0]; for (const p of points) if (Math.abs(sx(p.x) - x) < Math.abs(sx(best.x) - x)) best = p;
+    const px = sx(best.x), py = sy(best.y);
+    for (const n of [cross]) { n.setAttribute('x1', px); n.setAttribute('x2', px); n.setAttribute('visibility', 'visible'); }
+    dot.setAttribute('cx', px); dot.setAttribute('cy', py); dot.setAttribute('visibility', 'visible');
+    showTip(svg, W, px, py, [el('div', {class: 'muted'}, xFormat(best.x)), el('b', {}, num(best.y)), ' ' + unit, best.extra ? el('div', {class: 'muted'}, best.extra) : null]);
+  });
+  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); hideTip(); });
+  box.append(svg);
+  tableView(box, ['Time', label], points.map(p => [xFormat(p.x), num(p.y)]));
+}
+
+function barChart(id, rows, series, xKey, xFormat, label, empty) {
+  const box = $(id); box.replaceChildren(); const W = chartWidth(box);
+  const totals = rows.map(r => series.reduce((s, k) => s + r[k.key], 0));
+  if (!totals.some(Boolean)) { box.append(el('p', {class: 'empty'}, empty)); }
+  if (series.length > 1) box.append(el('div', {class: 'legend'}, ...series.map(s => { const n = el('span', {}, s.label); n.style.setProperty('--c', s.color); return n; })));
+  if (!totals.some(Boolean)) return;
+  const max = niceMax(Math.max(...totals));
+  const band = (W - M.l - M.r) / rows.length, bw = Math.max(2, band - 2);
+  const sy = v => (H - M.t - M.b) * v / max;
+  const svg = svgEl('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': label});
+  const step = Math.ceil(rows.length / 6);
+  axes(svg, max, rows.map((r, i) => i % step ? null : [M.l + band * i + band / 2, xFormat(r[xKey])]).filter(Boolean), W);
+  rows.forEach((r, i) => {
+    const x = M.l + band * i + 1;
+    let base = H - M.b;
+    const g = svgEl('g', {});
+    series.forEach((s, si) => {
+      const h = sy(r[s.key]); if (!h) return;
+      const top = si === series.length - 1 || !series.slice(si + 1).some(n => r[n.key]);
+      const gap = base === H - M.b ? 0 : 2;
+      const height = Math.max(0, h - gap);
+      g.append(svgEl('rect', {x, y: base - gap - height, width: bw, height, rx: top ? Math.min(4, bw / 2) : 0, fill: s.color}));
+      base -= h;
+    });
+    const hit = svgEl('rect', {x: M.l + band * i, y: M.t, width: band, height: H - M.t - M.b, fill: 'transparent'});
+    hit.addEventListener('pointermove', () => {
+      showTip(svg, W, x + bw / 2, H - M.b - sy(totals[i]),
+        [el('div', {class: 'muted'}, xFormat(r[xKey])), ...series.map(s => el('div', {}, s.label + ': ', el('b', {}, num(r[s.key]))))]);
+    });
+    hit.addEventListener('pointerleave', hideTip);
+    svg.append(g, hit);
+  });
+  box.append(svg);
+  tableView(box, ['Time', ...series.map(s => s.label)], rows.filter((r, i) => totals[i]).map(r => [xFormat(r[xKey]), ...series.map(s => num(r[s.key]))]));
+}
+
+function renderCharts() {
+  lineChart('chart-viewers', data.viewers_24h.map(p => ({x: p.ts, y: p.viewers, extra: p.channels + ' channels'})),
+    'Viewers', 'viewers', clock, 'No snapshots yet. They are saved every 5 minutes while the watcher runs.');
+  barChart('chart-chat', data.chat_60m, [{key: 'messages', label: 'Messages', color: 'var(--series-1)'}], 'minute', clock,
+    'Chat messages per minute', 'No chat counted in the last hour.');
+  barChart('chart-windows', data.windows_24h, [
+      {key: 'burst', label: 'Burst', color: 'var(--series-1)'},
+      {key: 'near_miss', label: 'Near miss', color: 'var(--series-2)'},
+      {key: 'control', label: 'Random control', color: 'var(--series-3)'}],
+    'hour', clock, 'Clip windows per hour', 'No clip windows in the last 24 hours.');
+}
+
+// ---------- other tabs ----------
+function renderStreamers() {
+  table('streamers', [
+    {label: 'Streamer', value: r => el('a', {href: 'https://www.twitch.tv/' + encodeURIComponent(r.streamer), target: '_blank', rel: 'noopener'}, r.streamer)},
+    {label: 'Watched', num: true, value: r => r.minutes_watched ? span(r.minutes_watched * 60) : '—'},
+    {label: 'Peak viewers', num: true, value: r => num(r.peak_viewers)},
+    {label: 'Best rank', num: true, value: r => r.best_rank || '—'},
+    {label: 'Bursts', num: true, value: r => num(r.bursts)},
+    {label: 'All windows', num: true, value: r => num(r.windows)},
+    {label: 'Clips', num: true, value: r => num(r.clips)},
+    {label: 'Rated', num: true, value: r => num(r.rated)},
+    {label: 'Avg rating', num: true, value: r => r.average_rating ?? '—'},
+    {label: 'Last window', value: r => ago(r.last_window)},
+  ], data.streamers_7d, 'Nothing recorded in the last 7 days.');
+}
+
+function renderActivity() {
+  table('recent', [
+    {label: 'When', value: r => stamp(r.anchor)},
+    {label: 'Streamer', value: r => r.streamer},
+    {label: 'Kind', value: r => el('span', {class: 'tag'}, KINDS[r.trigger_kind] || r.trigger_kind)},
+    {label: 'Msgs/10s', num: true, value: r => num(r.messages)},
+    {label: '× normal', num: true, value: r => r.spike_ratio ?? '—'},
+    {label: 'Chatters', num: true, value: r => num(r.unique_chatters)},
+    {label: 'Viewers', num: true, value: r => num(r.viewer_count)},
+    {label: 'Status', value: r => STATES[r.state] || r.state},
+    {label: 'Rating', num: true, value: r => r.score ? r.score + '/5' : '—'},
+    {label: 'Detail', wrap: true, value: r => r.state === 'waiting' && r.last_error ? 'Attempt ' + r.attempts + ': ' + r.last_error : (r.clip_id || r.detail || '')},
+  ], data.recent_windows, 'No clip windows yet.');
+  table('sessions', [
+    {label: 'Started', value: r => stamp(r.started)},
+    {label: 'Ran for', value: r => span((r.ended || Date.now() / 1000) - r.started) + (r.ended ? '' : ' (running?)')},
+    {label: 'Why it stopped', wrap: true, value: r => r.ended ? (r.exit_reason || '—') : ''},
+  ], data.sessions, 'The watcher has not run yet.');
+  table('unavailable', [
+    {label: 'Streamer', value: r => r.streamer}, {label: 'When', value: r => stamp(r.noted)},
+    {label: 'Reason', wrap: true, value: r => r.reason},
+  ], data.unavailable, 'None.');
+  const jobs = data.runner && data.runner.jobs ? Object.entries(data.runner.jobs) : [];
+  const names = {'ingest': 'Clip finished VODs', 'render-live': 'Render saved windows', 'publish': 'Send approved clips'};
+  const live = data.runner && data.runner.fresh;
+  table('jobs', [
+    {label: 'Job', value: ([n]) => names[n] || n},
+    {label: 'Every', value: ([, j]) => j.every_minutes ? j.every_minutes + ' min' : 'Off'},
+    {label: 'Now', value: ([, j]) => live && j.running ? 'Running' : '—'},
+    {label: 'Next run', value: ([, j]) => live && j.every_minutes && j.next_run ? clock(j.next_run) : '—'},
+    {label: 'Last finished', value: ([, j]) => j.last_finished ? ago(j.last_finished) + (j.last_exit ? ' (exit ' + j.last_exit + ', see its log)' : '') : '—'},
+  ], jobs, 'Start the schedule to run jobs automatically.');
+}
+
+// ---------- settings ----------
+const DAY_NAMES = {mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun'};
+function renderSettings() {
+  const form = $('settings-form'); form.replaceChildren();
+  const groups = {};
+  for (const f of settings.fields) (groups[f.group] ||= []).push(f);
+  for (const [group, fields] of Object.entries(groups)) {
+    const set = el('fieldset', {}, el('legend', {}, group));
+    for (const f of fields) {
+      const id = 'f-' + f.name.replace('.', '-'), value = settings.values[f.name];
+      let input;
+      if (f.kind === 'days') {
+        input = el('div', {class: 'days', id, role: 'group', 'aria-label': f.label});
+        for (const [day, name] of Object.entries(DAY_NAMES)) {
+          const box = el('input', {type: 'checkbox', value: day}); box.checked = value.includes(day);
+          input.append(el('label', {}, box, name));
+        }
+      } else if (f.kind === 'bool') {
+        input = el('input', {type: 'checkbox', id}); input.checked = value;
+      } else {
+        input = el('input', {id, type: f.kind === 'time' ? 'text' : f.kind === 'text' ? 'text' : 'number',
+          ...(f.kind === 'time' ? {pattern: '([01]\\d|2[0-3]):[0-5]\\d|24:00', placeholder: 'HH:MM', inputmode: 'numeric'} : {}),
+          ...(f.min !== null ? {min: f.min} : {}), ...(f.max !== null ? {max: f.max} : {}),
+          ...(f.kind === 'float' ? {step: '0.1'} : f.kind === 'int' ? {step: '1'} : {})});
+        input.value = value;
+      }
+      input.dataset.name = f.name; input.dataset.kind = f.kind;
+      set.append(el('div', {class: 'field'}, el('label', {for: id}, f.label), input, f.help ? el('div', {class: 'help'}, f.help) : null));
+    }
+    form.append(set);
+  }
+  form.append(el('div', {class: 'save-bar'},
+    el('button', {class: 'primary', type: 'submit', id: 'save'}, 'Save settings'),
+    el('button', {type: 'button', id: 'restart'}, 'Restart watcher'),
+    el('span', {class: 'muted small', id: 'save-status'}, 'The schedule picks up watch hours and job intervals within 15 seconds. Detection settings apply when the watcher restarts.')));
+  $('restart').onclick = () => act('restart-watcher');
+  form.oninput = () => { dirty = true; $('save-status').textContent = 'Unsaved changes'; };
+}
+
+function collect() {
+  const changes = {};
+  for (const node of $('settings-form').querySelectorAll('[data-name]')) {
+    const name = node.dataset.name, kind = node.dataset.kind; let value;
+    if (kind === 'days') value = [...node.querySelectorAll('input:checked')].map(b => b.value);
+    else if (kind === 'bool') value = node.checked;
+    else if (kind === 'int') value = node.value === '' ? null : Number(node.value);
+    else if (kind === 'float') value = node.value === '' ? null : Number(node.value);
+    else value = node.value.trim();
+    if (JSON.stringify(value) !== JSON.stringify(settings.values[name])) changes[name] = value;
+  }
+  return changes;
+}
+
+$('settings-form').onsubmit = async e => {
+  e.preventDefault();
+  const changes = collect();
+  if (!Object.keys(changes).length) { $('save-status').textContent = 'Nothing changed.'; return; }
+  $('save').disabled = true; $('save-status').textContent = 'Saving…';
+  try {
+    const result = await post('/api/settings', {changes});
+    settings = result; dirty = false; renderSettings();
+    $('save-status').textContent = 'Saved to config.toml (the old copy is in data/backups). Restart the watcher to apply detection changes.';
+    load();
+  } catch (error) { $('save-status').textContent = 'Not saved: ' + error.message; $('save').disabled = false; }
+};
+
+// ---------- networking ----------
+async function post(url, body) {
+  const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Dashboard-Token': token}, body: JSON.stringify(body)});
+  const result = await r.json().catch(() => ({error: 'Unexpected reply (' + r.status + ')'}));
+  if (!r.ok) throw Error(result.error || 'Request failed');
+  return result;
+}
+function banner(text) { const b = $('banner'); b.textContent = text; b.classList.toggle('show', !!text); }
+async function act(action) {
+  try {
+    const result = await post('/api/control', {action});
+    if (action === 'review') { window.open(result.message, '_blank', 'noopener'); return; }
+    banner(result.message); setTimeout(load, 1500);
+  } catch (error) { banner(error.message); }
+}
+$('start').onclick = () => act('start');
+$('stop').onclick = () => act('stop');
+$('review').onclick = () => act('review');
+
+async function load() {
+  try {
+    const r = await fetch('/api/overview');
+    if (!r.ok) throw Error('Could not load the dashboard (' + r.status + ')');
+    data = await r.json();
+    renderStatus(); renderTiles(); renderChannels(); renderCharts(); renderStreamers(); renderActivity();
+  } catch (error) { banner(error.message + '. Is the dashboard still running?'); }
+}
+async function loadSettings() {
+  const r = await fetch('/api/settings');
+  if (r.ok) { settings = await r.json(); renderSettings(); }
+}
+
+function route() {
+  const name = (location.hash || '#overview').slice(1);
+  const known = ['overview', 'streamers', 'activity', 'settings'].includes(name) ? name : 'overview';
+  document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + known));
+  document.querySelectorAll('nav a').forEach(a => { if (a.hash === '#' + known) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  if (known === 'settings' && !dirty) loadSettings();
+}
+window.addEventListener('hashchange', route);
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => data && renderCharts(), 150); });
+route(); load(); setInterval(() => { if (!document.hidden) load(); }, 10000);
+</script>
+</body>
+</html>

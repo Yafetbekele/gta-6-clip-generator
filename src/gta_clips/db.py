@@ -106,6 +106,17 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        [],
+        """
+        CREATE TABLE IF NOT EXISTS channel_snapshots (
+            ts INTEGER NOT NULL, stream_id TEXT NOT NULL, streamer TEXT NOT NULL,
+            viewers INTEGER, viewer_rank INTEGER, watched INTEGER NOT NULL,
+            PRIMARY KEY(ts, stream_id)
+        );
+        CREATE INDEX IF NOT EXISTS channel_snapshots_streamer ON channel_snapshots(streamer, ts)
+        """,
+    ),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

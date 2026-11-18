@@ -4,10 +4,12 @@ from bisect import insort
 from collections import deque
 from dataclasses import dataclass, field
 from itertools import islice
+from pathlib import Path
 from threading import Event, Lock, Thread
 from urllib.parse import urlsplit
 import json
 import logging
+import os
 import random
 import time
 
@@ -38,6 +40,10 @@ PEAK_SECONDS = HALF_WINDOW
 # Frames buffered by the socket's reader thread, so Twitch's pings are answered during HTTP work.
 RECEIVE_QUEUE = 10_000
 NETWORK_ERRORS = (WebSocketException, OSError, requests.RequestException)
+STATUS_FILE = "watch-status.json"
+# Creating this file asks a running watcher to stop cleanly (used by `gta-clips run`).
+STOP_FILE = "watch-live.stop"
+SNAPSHOT_SECONDS = 300
 
 
 class ChatAuthError(RuntimeError):
@@ -491,7 +497,8 @@ def _sample_comparisons(config: Config, stream: Broadcast, rate: ChatRate, times
 
 
 def _listen(config: Config, twitch: Twitch, refresher: StreamRefresher, stop: Event,
-            joins: deque[float], seen: dict[str, None], rates: dict[str, ChatRate], buckets: ChatBuckets):
+            joins: deque[float], seen: dict[str, None], rates: dict[str, ChatRate], buckets: ChatBuckets,
+            status: "WatchStatus | None" = None):
     subscriptions: dict[str, str] = {}
     watching: dict[str, float] = {}
     denied: dict[str, float] = {}
@@ -525,6 +532,8 @@ def _listen(config: Config, twitch: Twitch, refresher: StreamRefresher, stop: Ev
                 refresh_at = now + REFRESH_SECONDS
             if now >= flush_at:
                 buckets.flush(config)
+                if status is not None:
+                    status.write("watching", desired, subscriptions, watching, denied, rates)
                 flush_at = now + 10
             try:
                 packet = json.loads(socket.recv(timeout=1))
@@ -600,6 +609,75 @@ def _update_coverage(config: Config, desired: dict[str, Broadcast], subscription
                  config.live.max_channels)
 
 
+def write_json(path: Path, value: dict):
+    """Replace a small status file atomically, so a reader never sees half of it."""
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, indent=1), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+class WatchStatus:
+    """What the watcher is doing right now, for the dashboard. Failures here never stop watching."""
+
+    def __init__(self, config: Config, session_id: int | None):
+        self.config, self.session_id = config, session_id
+        self.started = time.time()
+        self.snapshot_at = 0.0
+        self.path = config.paths.data_dir / STATUS_FILE
+
+    def write(self, state: str, desired: dict[str, Broadcast] | None = None,
+              subscriptions: dict[str, str] | None = None, watching: dict[str, float] | None = None,
+              denied: dict[str, float] | None = None, rates: dict[str, ChatRate] | None = None):
+        desired, subscriptions = desired or {}, subscriptions or {}
+        watching, denied, rates = watching or {}, denied or {}, rates or {}
+        wall, mono = time.time(), time.monotonic()
+        channels = []
+        for channel, stream in desired.items():
+            rate = rates.get(stream.stream_id)
+            since = watching.get(channel)
+            channels.append({
+                "login": stream.login, "broadcaster_id": channel, "stream_id": stream.stream_id,
+                "viewers": stream.viewer_count, "rank": stream.rank, "language": stream.language,
+                "live_since": stream.started_at,
+                "watching": channel in subscriptions,
+                "watching_since": wall - (mono - since) if since is not None else None,
+                "held_for_seconds": round(denied[channel] - mono) if denied.get(channel, 0) > mono else None,
+                "warm": bool(rate and rate.warm(self.config.live)),
+                "covered_seconds": round(rate.covered_seconds) if rate else 0,
+                "baseline_per_10s": round(rate.baseline, 1) if rate and rate.first_seen else None,
+                "messages_last_10s": len(rate.recent) if rate else 0,
+                "unique_last_10s": rate.unique_chatters if rate else 0,
+            })
+        try:
+            write_json(self.path, {
+                "state": state, "pid": os.getpid(), "session_id": self.session_id,
+                "started": self.started, "updated": wall, "game": self.config.twitch.game_name,
+                "max_channels": self.config.live.max_channels, "channels": channels,
+            })
+        except OSError as error:
+            logging.debug("Could not write watcher status: %s", error)
+        if channels and wall - self.snapshot_at >= SNAPSHOT_SECONDS:
+            self.snapshot_at = wall
+            try:
+                with connect(self.config.paths.database) as db:
+                    db.executemany(
+                        """INSERT OR IGNORE INTO channel_snapshots(ts, stream_id, streamer, viewers,
+                               viewer_rank, watched) VALUES (?, ?, ?, ?, ?, ?)""",
+                        [(int(wall), item["stream_id"], item["login"], item["viewers"], item["rank"],
+                          int(item["watching"])) for item in channels],
+                    )
+            except Exception as error:
+                logging.warning("Could not save a channel snapshot: %s", describe(error))
+
+
+def _watch_stop_file(config: Config, stop: Event):
+    path = config.paths.data_dir / STOP_FILE
+    while not stop.wait(2):
+        if path.exists():
+            logging.info("Stop requested by %s", path.name)
+            stop.set()
+
+
 def _render_loop(config: Config, stop: Event):
     context = RenderContext(config.editing.whisper_model)
     while not stop.is_set():
@@ -641,6 +719,11 @@ def watch(config: Config, stop: Event | None = None):
         game = twitch.game_id(config.twitch.game_name)
         stop = stop if stop is not None else Event()
         session_id = _start_session(config)
+        stop_file = config.paths.data_dir / STOP_FILE
+        stop_file.unlink(missing_ok=True)
+        status = WatchStatus(config, session_id)
+        status.write("starting")
+        Thread(target=_watch_stop_file, args=(config, stop), name="stop-file", daemon=True).start()
         refresher = StreamRefresher(config, game, stop)
         renderer = Thread(target=_render_loop, args=(config, stop), name="live-render", daemon=True)
         joins, seen, rates, buckets = deque(), {}, {}, ChatBuckets()
@@ -659,9 +742,10 @@ def watch(config: Config, stop: Event | None = None):
                 began = time.monotonic()
                 try:
                     if refresher.snapshot():
-                        _listen(config, twitch, refresher, stop, joins, seen, rates, buckets)
+                        _listen(config, twitch, refresher, stop, joins, seen, rates, buckets, status)
                         stop.wait(5)
                     else:
+                        status.write("no live channels")
                         stop.wait(REFRESH_SECONDS)
                     failures = 0
                 except ChatAuthError:
@@ -675,6 +759,7 @@ def watch(config: Config, stop: Event | None = None):
                         logging.warning("Twitch connection will retry in %.0fs: %s", delay, describe(error))
                     else:
                         logging.exception("Watcher error; retrying in %.0fs", delay)
+                    status.write(f"reconnecting in {delay:.0f}s")
                     stop.wait(delay)
         except BaseException as error:
             reason = describe(error) or type(error).__name__
@@ -689,3 +774,5 @@ def watch(config: Config, stop: Event | None = None):
                 logging.info("Waiting for the current clip render to finish")
                 renderer.join()
             _end_session(config, session_id, reason)
+            status.write("stopped")
+            stop_file.unlink(missing_ok=True)

@@ -84,6 +84,19 @@ Before a database upgrade, the app copies the database to `data/backups/`. Upgra
 
 For continuous monitoring, run `watch-live` in a terminal or configure one Windows Task Scheduler task to start it at logon and restart on failure. Use the same executable, config, and user account as the other workers. The watcher logs to `data/watch-live.log`.
 
+## Dashboard and run schedule
+
+Run `gta-clips dashboard --open` to open a local page at `http://127.0.0.1:8766`. It shows:
+
+- **Overview:** which channels the watcher is in right now, their viewer counts and current chat rate against each channel's normal rate, plus today's bursts, clips waiting for review, and ratings. Charts show viewers in watched channels over 24 hours, chat messages per minute over the last hour, and clip windows per hour, split into bursts, near misses, and random controls.
+- **Streamers:** the last 7 days per streamer: approximate watch time, peak viewers, bursts, clips, and average rating.
+- **Activity:** recent clip windows with their status and last error, watcher runs, streams that cannot be clipped, and scheduled jobs.
+- **Settings:** watch days and hours, how often each worker runs, the category, the number of channels, and the burst and comparison-clip thresholds. Saving checks the values with the normal config loader, keeps your comments, and copies the old file to `data/backups/` first. Detection settings take effect when the watcher restarts; the page has a button for that.
+
+**Start schedule** runs `gta-clips run` in the background. It starts `watch-live` during the watch hours in `[runtime]`, asks it to stop outside them (a clip that is rendering finishes first), restarts it with a growing delay if it keeps failing, and starts `render-live`, `ingest`, and `publish` at their intervals. `publish` is off by default and only ever sends clips you approved. **Stop schedule** stops it. You can also run `gta-clips run` in a terminal; it logs to `data/run.log`. If you used Windows Task Scheduler for these workers, turn those tasks off before starting the schedule so they do not run twice. Only one copy of each worker runs at a time.
+
+Viewer history starts when the watcher first runs with this version; it saves one snapshot of the watched channels every 5 minutes. The dashboard only listens on this computer and reads the same SQLite database as the other commands.
+
 ## Authorize platform access
 
 ### YouTube Shorts
@@ -128,3 +141,4 @@ Keep OAuth callback URLs, credentials, tokens, media, and the SQLite database pr
 | `metadata.py` and `review.py` | Generate transcript-based suggestions and handle preview, editing, approval, rejection, and export. |
 | `oauth.py`, `upload/`, and `scheduler.py` | Authorize accounts, checkpoint official API uploads, and enforce the selected schedule. |
 | `live.py` and `live_render.py` | Count live chat bursts and render the matching 60-second VOD sections for review. |
+| `runner.py`, `dashboard.py`, and `settings_edit.py` | Run workers on the `[runtime]` schedule, serve the local dashboard, and save setting changes. |

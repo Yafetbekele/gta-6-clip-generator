@@ -64,7 +64,7 @@ def _review(config, args):
         review.export_clip(config, args.clip_id, args.destination)
 
 
-LOGGED_COMMANDS = ("ingest", "publish", "watch-live", "render-live", "review-web")
+LOGGED_COMMANDS = ("ingest", "publish", "watch-live", "render-live", "review-web", "run", "dashboard")
 
 
 def _logging(config, command: str) -> bool:
@@ -80,7 +80,7 @@ def _logging(config, command: str) -> bool:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=handlers)
     install_thread_logging()
-    if command != "review-web":
+    if command not in ("review-web", "dashboard"):
         log_versions()
     return True
 
@@ -98,6 +98,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     web = commands.add_parser("review-web", help="Watch clips and save ratings in a local browser")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--open", action="store_true", dest="open_browser")
+    commands.add_parser("run", help="Start each worker on the [runtime] schedule until stopped")
+    board = commands.add_parser("dashboard", help="See what the watcher is doing and change settings")
+    board.add_argument("--port", type=int, default=8766)
+    board.add_argument("--open", action="store_true", dest="open_browser")
     auth = commands.add_parser("auth", help="Authorize Twitch chat or a publishing account")
     auth.add_argument("platform", choices=("twitch", *PLATFORMS))
     retry = commands.add_parser("retry", help="Return a failed upload to its platform queue")
@@ -141,6 +145,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .review_web import serve
             serve(config, args.port, args.open_browser)
             return 0
+        if args.command == "dashboard":
+            from .dashboard import serve as serve_dashboard
+            serve_dashboard(config, args.config.expanduser().resolve(), args.port, args.open_browser)
+            return 0
+        if args.command == "run":
+            from .runner import run
+            run(args.config)
+            return 0
         if args.command == "ingest":
             from .pipeline import ingest
             return ingest(config)
@@ -169,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _review(config, args)
     except WorkerBusy as exc:
-        parser.exit(0 if args.command in ("ingest", "publish", "watch-live") else 1, f"{exc}\n")
+        parser.exit(0 if args.command in ("ingest", "publish", "watch-live", "run") else 1, f"{exc}\n")
     except RequestException as exc:
         fail(f"API request failed ({type(exc).__name__}). Check credentials and connectivity.\n", exc)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as exc:

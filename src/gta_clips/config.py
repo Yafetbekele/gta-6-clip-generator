@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, fields
+from datetime import datetime
 from pathlib import Path
 import re
 from sys import float_info
@@ -94,6 +95,45 @@ class LiveConfig:
     near_miss_interval_seconds: int = 3600
 
 
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """When `gta-clips run` starts each worker. Times are local, as HH:MM."""
+    watch_days: tuple[str, ...] = DAYS
+    watch_start: str = "00:00"
+    watch_end: str = "24:00"
+    ingest_every_minutes: int = 0
+    render_every_minutes: int = 15
+    publish_every_minutes: int = 0
+
+    def watching_at(self, moment: datetime) -> bool:
+        """True if ``moment`` falls in a watch window. A window past midnight belongs to its start day."""
+        start, end = _minutes(self.watch_start), _minutes(self.watch_end)
+        now = moment.hour * 60 + moment.minute
+        today = DAYS[moment.weekday()]
+        yesterday = DAYS[(moment.weekday() - 1) % 7]
+        if start == end or (start == 0 and end == 1440):
+            return today in self.watch_days
+        if start < end:
+            return today in self.watch_days and start <= now < end
+        return (now >= start and today in self.watch_days) or (now < end and yesterday in self.watch_days)
+
+    def describe(self) -> str:
+        days = "every day" if set(self.watch_days) == set(DAYS) else ", ".join(
+            day.title() for day in DAYS if day in self.watch_days) or "no days"
+        if _minutes(self.watch_start) == _minutes(self.watch_end) or (
+                self.watch_start == "00:00" and self.watch_end == "24:00"):
+            return f"All day, {days}"
+        return f"{self.watch_start}–{self.watch_end}, {days}"
+
+
+def _minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
 @dataclass(frozen=True)
 class Config:
     paths: PathsConfig
@@ -102,6 +142,7 @@ class Config:
     editing: EditingConfig
     schedule: dict[str, ScheduleConfig]
     live: LiveConfig = LiveConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
 
 
 PLATFORMS = ("youtube", "instagram", "tiktok")
@@ -266,6 +307,38 @@ def _live(raw: object) -> LiveConfig:
     )
 
 
+def _clock(value: object, path: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d|24:00", value):
+        raise ConfigError(f"{path} must be a time like 18:30 (00:00 to 24:00)")
+    return value
+
+
+def _interval(value: object, path: str) -> int:
+    minutes = _integer(value, path, 0, 1440)
+    if 0 < minutes < 5:
+        raise ConfigError(f"{path} must be 0 (off) or at least 5 minutes")
+    return minutes
+
+
+def _runtime(raw: object) -> RuntimeConfig:
+    options = _table(raw, "runtime", (field.name for field in fields(RuntimeConfig)))
+    defaults = RuntimeConfig()
+    days = options.get("watch_days", list(defaults.watch_days))
+    if not isinstance(days, list) or any(day not in DAYS for day in days):
+        raise ConfigError(f"runtime.watch_days must list days from {', '.join(DAYS)}")
+    return RuntimeConfig(
+        watch_days=tuple(day for day in DAYS if day in days),
+        watch_start=_clock(options.get("watch_start", defaults.watch_start), "runtime.watch_start"),
+        watch_end=_clock(options.get("watch_end", defaults.watch_end), "runtime.watch_end"),
+        ingest_every_minutes=_interval(options.get("ingest_every_minutes", defaults.ingest_every_minutes),
+                                       "runtime.ingest_every_minutes"),
+        render_every_minutes=_interval(options.get("render_every_minutes", defaults.render_every_minutes),
+                                       "runtime.render_every_minutes"),
+        publish_every_minutes=_interval(options.get("publish_every_minutes", defaults.publish_every_minutes),
+                                        "runtime.publish_every_minutes"),
+    )
+
+
 def load_config(filename: str | Path = "config.toml") -> Config:
     """Read a config file. Relative storage paths start at the file's directory."""
     try:
@@ -274,7 +347,7 @@ def load_config(filename: str | Path = "config.toml") -> Config:
             raw = tomllib.load(file)
     except (OSError, RuntimeError, ValueError) as exc:
         raise ConfigError(f"Cannot read {filename}: {exc}") from exc
-    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule", "live"))
+    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule", "live", "runtime"))
     paths = _table(options.get("paths", {}), "paths", ("data_dir",))
     directory = _text(paths.get("data_dir", "data"), "paths.data_dir")
     try:
@@ -288,4 +361,5 @@ def load_config(filename: str | Path = "config.toml") -> Config:
         editing=_editing(options.get("editing", {})),
         schedule=_schedule(options.get("schedule", {})),
         live=_live(options.get("live", {})),
+        runtime=_runtime(options.get("runtime", {})),
     )

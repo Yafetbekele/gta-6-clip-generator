@@ -38,6 +38,18 @@ control_interval_seconds = 3600
 near_miss_multiplier = 2.0
 near_miss_interval_seconds = 3600
 
+# Used by `gta-clips run` and the dashboard. Times are local, as HH:MM.
+# An end earlier than the start runs past midnight, e.g. 22:00 to 02:00.
+[runtime]
+watch_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+watch_start = "00:00"
+watch_end = "24:00"
+# How often each worker starts, in minutes. 0 turns it off; otherwise at least 5.
+render_every_minutes = 15
+ingest_every_minutes = 0
+# Publishing only ever sends clips you approved.
+publish_every_minutes = 0
+
 [editing]
 layout = "fit"
 whisper_model = "base"
