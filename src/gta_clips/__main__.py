@@ -72,7 +72,7 @@ def _review(config, args):
         review.export_clip(config, args.clip_id, args.destination)
 
 
-LOGGED_COMMANDS = ("ingest", "publish", "watch-live", "render-live", "review-web", "run", "dashboard")
+LOGGED_COMMANDS = ("ingest", "publish", "ready", "watch-live", "render-live", "review-web", "run", "dashboard")
 
 
 def _logging(config, command: str) -> bool:
@@ -103,6 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser("render-live", help="Process saved chat bursts that now have a VOD")
     commands.add_parser("live-status", help="List recent chat bursts and their clip status")
     commands.add_parser("publish", help="Send approved clips when their schedule permits")
+    commands.add_parser("ready", help="Copy the best new clips to the ready-to-post folder for posting by hand")
     web = commands.add_parser("review-web", help="Watch clips and save ratings in a local browser")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--open", action="store_true", dest="open_browser")
@@ -191,6 +192,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 live_status(config)
             return 0
+        if args.command == "ready":
+            from .ready import cleanup, export_due
+            with worker_lock(config.paths.data_dir, "ready"):
+                added = export_due(config)
+                cleanup(config)
+            print(f"Added {len(added)} clips to {config.paths.data_dir / 'ready-to-post'}")
+            return 0
         if args.command == "publish":
             from .scheduler import publish_due
             return publish_due(config)
@@ -208,7 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _review(config, args)
     except WorkerBusy as exc:
-        parser.exit(0 if args.command in ("ingest", "publish", "watch-live", "run") else 1, f"{exc}\n")
+        parser.exit(0 if args.command in ("ingest", "publish", "ready", "watch-live", "run") else 1, f"{exc}\n")
     except RequestException as exc:
         fail(f"API request failed ({type(exc).__name__}). Check credentials and connectivity.\n", exc)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as exc:

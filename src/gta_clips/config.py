@@ -111,6 +111,8 @@ class RuntimeConfig:
     ingest_every_minutes: int = 0
     render_every_minutes: int = 15
     publish_every_minutes: int = 0
+    ready_every_minutes: int = 30
+    ready_per_day: int = 6
 
     def watching_at(self, moment: datetime) -> bool:
         """True if ``moment`` falls in a watch window. A window past midnight belongs to its start day."""
@@ -429,6 +431,9 @@ def _runtime(raw: object) -> RuntimeConfig:
                                        "runtime.render_every_minutes"),
         publish_every_minutes=_interval(options.get("publish_every_minutes", defaults.publish_every_minutes),
                                         "runtime.publish_every_minutes"),
+        ready_every_minutes=_interval(options.get("ready_every_minutes", defaults.ready_every_minutes),
+                                      "runtime.ready_every_minutes"),
+        ready_per_day=_integer(options.get("ready_per_day", defaults.ready_per_day), "runtime.ready_per_day", 0, 50),
     )
 
 

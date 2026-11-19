@@ -122,6 +122,17 @@ MIGRATIONS = [
         [("live_bursts", "account", "TEXT"), ("clips", "account", "TEXT")],
         "CREATE INDEX IF NOT EXISTS clips_account ON clips(account, state)",
     ),
+    (
+        # Clips copied to the ready-to-post folder, so each is offered once.
+        [],
+        """
+        CREATE TABLE IF NOT EXISTS ready_exports (
+            clip_id TEXT PRIMARY KEY REFERENCES clips(id), account TEXT NOT NULL, day TEXT NOT NULL,
+            exported INTEGER NOT NULL DEFAULT (unixepoch()), path TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ready_exports_day ON ready_exports(account, day)
+        """,
+    ),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

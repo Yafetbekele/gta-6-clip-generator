@@ -51,6 +51,10 @@ render_every_minutes = 15
 ingest_every_minutes = 0
 # Publishing only ever sends clips you approved.
 publish_every_minutes = 0
+# Copies the best new clips into data/ready-to-post/<day>/<account set>/ for posting by hand,
+# up to ready_per_day per account set, spread through the day. Nothing is uploaded.
+ready_every_minutes = 30
+ready_per_day = 6
 
 [editing]
 renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Requires layout="fit".

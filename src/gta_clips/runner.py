@@ -21,7 +21,7 @@ TICK_SECONDS = 15
 # A watcher that is still finishing a render after this long is stopped forcefully.
 WATCH_STOP_GRACE = 15 * 60
 JOBS = (("ingest", "ingest_every_minutes"), ("render-live", "render_every_minutes"),
-        ("publish", "publish_every_minutes"))
+        ("publish", "publish_every_minutes"), ("ready", "ready_every_minutes"))
 
 
 def _command(config_path: Path, name: str) -> list[str]:
