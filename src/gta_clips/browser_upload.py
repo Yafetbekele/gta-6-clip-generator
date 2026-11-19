@@ -83,7 +83,7 @@ def allowed(db, platform, account, daily_limit, spacing, now):
         "SELECT COUNT(*), MAX(started) FROM posts WHERE platform=? AND account=? AND started>?",
         (platform, account, now - 86400),
     ).fetchone()
-    return count < daily_limit and (latest is None or now - latest >= spacing)
+    return (daily_limit is None or count < daily_limit) and (latest is None or now - latest >= spacing)
 
 
 def claim(db, platform, account, clip):
@@ -232,6 +232,7 @@ def main(argv=None):
     parser.add_argument("--clip-id")
     parser.add_argument("--url", default="")
     parser.add_argument("--confirm-not-posted", action="store_true")
+    parser.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         config, target = settings(args.settings, args.account, args.platform)
@@ -240,13 +241,20 @@ def main(argv=None):
         root = (base / config["ready_folder"]).resolve()
         if args.maximum < 1:
             raise ValueError("--max must be positive")
-        daily = int(target.get("daily_limit", 4))
-        spacing = float(target.get("spacing_minutes", 60)) * 60
-        if daily < 0 or spacing < 0:
+        daily = target.get("daily_limit")
+        daily = int(daily) if daily is not None else None
+        spacing = float(target.get("spacing_minutes", 0)) * 60
+        if (daily is not None and daily < 0) or spacing < 0:
             raise ValueError("Posting limits must be nonnegative")
         with worker_lock(state, "browser-upload"):
             db = ledger(state / "posts.sqlite3")
             try:
+                if args.scheduled:
+                    from .browser_schedule import readiness
+                    reason = readiness(db, args.account, args.platform, target, time.time())
+                    if reason != 'ready':
+                        print(f'Skipped: {reason}')
+                        return 0
                 return execute(args, config, target, state, root, db, daily, spacing)
             finally:
                 db.close()

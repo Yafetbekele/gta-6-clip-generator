@@ -23,7 +23,13 @@ if __name__ == '__main__':
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
     account = choose('Account folder', list(config['accounts']))
     platform = choose('Platform', list(config['accounts'][account]))
-    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login'])
+    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting'])
+    if action in ('enable hourly posting', 'disable hourly posting'):
+        enabled = action == 'enable hourly posting'
+        config['accounts'][account][platform]['auto_post'] = enabled
+        settings.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
+        print('Hourly posting enabled; a successful test upload is required before it runs.' if enabled else 'Hourly posting disabled.')
+        raise SystemExit(0)
     argv = ['--settings', str(settings), '--account', account, '--platform', platform]
     if action == 'publish one':
         print('This publishes the next eligible ready-folder video using the saved title and caption.')

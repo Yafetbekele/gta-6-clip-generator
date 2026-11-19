@@ -90,6 +90,7 @@ class BrowserUploadTests(unittest.TestCase):
         self.assertFalse(allowed(self.db, 'youtube', 'test', 1, 0, 103601))
         self.assertTrue(allowed(self.db, 'youtube', 'test', 1, 0, 186401))
         self.assertFalse(allowed(self.db, 'youtube', 'test', 0, 0, 186401))
+        self.assertTrue(allowed(self.db, 'youtube', 'test', None, 0, 100001))
 
     def test_wrong_youtube_channel_is_rejected(self):
         class Page:

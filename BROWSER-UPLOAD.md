@@ -1,5 +1,21 @@
 # Browser uploader: YouTube, TikTok and Instagram
 
+## Hourly posting across account groups
+
+`browser-upload.json` can contain ten account groups with three platform destinations each. `account_groups` stores organization labels and email notes only; never store passwords there. Missing channel IDs and handles must be filled before login. The live local configuration has 30 slots, but only the tested GTA 6 Clips 2 YouTube destination is enabled.
+
+Set `auto_post: true` on each platform destination after login, verification, and a successful test upload. The scheduler also requires a `posted` ledger record and refuses to proceed if that destination has any `held` upload. A failure on one destination does not prevent processing the others. Files in the ready folder are the publication queue. An empty queue waits; missed hours do not cause catch-up batches.
+
+Run `install-hourly-uploads.ps1` in PowerShell to register **Twitch Clips Hourly Browser Uploads**. It checks every five minutes, uploads at most one per destination per pass and enforces at least 60 minutes since the last upload attempt, including manual uploads. There is no additional daily cap. Chrome windows may appear during uploads. Keep Windows signed in, the computer awake, and dedicated uploader profiles closed. Nothing runs while the computer is off. Disable the named task in Windows Task Scheduler to stop automatic posting.
+
+Check readiness without posting:
+
+```powershell
+.\.venv\Scripts\python.exe -m gta_clips.browser_schedule --dry-run
+```
+
+Local results are in `data/browser-upload/hourly-status.json` and `hourly-uploads.log`. Google Docs is an organizational tracker only; edits there do not automatically change uploader settings. Manual `publish one` remains available without the hourly restriction unless you explicitly configure one.
+
 This optional uploader uses Python + Playwright, with no AI calls or API keys. Each platform/account has its own local browser profile. It reads MP4s and their `.txt` metadata in `ready-to-post/YYYY-MM-DD/account/`. Putting a file there makes it eligible; `run --publish` explicitly publishes eligible files. It does not read the review queue's approval status.
 
 **Status:** local parsing, duplicate protection, account mismatch and scheduling tests are covered. Browser flows are initial adapters, not yet validated end-to-end against your signed-in TikTok/Instagram accounts. Website controls can change. A missing control stops the batch; the script does not guess buttons, solve CAPTCHAs, or bypass account restrictions. TikTok requires an active account; a banned account will not work. Instagram posts use that account's existing audience/privacy settings.
@@ -41,7 +57,7 @@ Use English site UI. The program checks the Studio channel ID or the site's auth
 
 Substitute `tiktok` or `instagram` to post there. Preview sends nothing. YouTube without `--publish` requests a private upload; TikTok and Instagram require `--publish`. Captions contain only the Title, Description and Hashtags sections, never the sign-in email or account notes. Streamer credit links are required; oversized captions are rejected rather than cutting credits off. Videos are not re-encoded. Instagram selects Original crop to preserve the full frame.
 
-Defaults: four attempts per rolling 24 hours per destination, at least 60 minutes apart, at most one per command. `daily_limit: 0` disables uploads. `--max` does not override spacing or daily limits. Run again when due. No background process is installed automatically. In Windows Task Scheduler, run the command hourly **only when you are logged on**, with the project as the Start in folder. Use a separate task per platform/account and avoid simultaneous tasks (a shared file lock protects the ledger). No AI service needs to be running.
+Defaults: no daily cap and no hourly spacing, at most one per command. Missing or null daily_limit means unlimited; spacing_minutes defaults to 0. Optional numeric limits can still be configured. `daily_limit: 0` disables uploads. `--max` does not override spacing or daily limits. Run again when due. No background process is installed automatically. In Windows Task Scheduler, run the command hourly **only when you are logged on**, with the project as the Start in folder. Use a separate task per platform/account and avoid simultaneous tasks (a shared file lock protects the ledger). No AI service needs to be running.
 
 ## Duplicates and recovery
 
