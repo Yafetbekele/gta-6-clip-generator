@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import asdict, dataclass
 import re
+import zlib
 import unicodedata
 
 MAX_HOOK_LENGTH = 72
@@ -22,6 +23,7 @@ class ContextHook:
     text: str = ''
     evidence: str = ''
     method: str = 'none'
+    label: str = ''
 
     def to_dict(self):
         return asdict(self)
@@ -69,3 +71,43 @@ def suggest_hook(transcript: str) -> ContextHook:
 
     selected = max(candidates, key=score)
     return ContextHook(selected, selected, 'transcript_quote_v1')
+
+
+# Short names viewers actually type; other categories are shown as Twitch names them.
+SHORT_GAME = {'grand theft auto vi': 'GTA 6', 'grand theft auto v': 'GTA 5'}
+NOT_A_GAME = {'just chatting', 'irl', 'talk shows & podcasts'}
+# Prompts frame the streamer's own words as something to argue about; they claim nothing.
+QUOTE_LABELS = ('HOT TAKE OR FACTS?', 'AGREE OR DISAGREE?', 'IS THIS TAKE TOO FAR?',
+                'CHAT WAS SPLIT ON THIS', 'RIGHT OR WRONG?')
+# Opinions about the game itself, never about the streamer, kept as questions or "change my mind".
+GAME_TAKES = (('UNPOPULAR OPINION', '{game} is overhyped. Change my mind.'),
+              ('BE HONEST', 'Was {game} really worth the wait?'),
+              ('DEBATE', 'Is {game} already the best game ever made?'),
+              ('HOT TAKE', '{game} online will ruin {game}. Agree?'),
+              ('BE HONEST', 'Is {game} actually better than {previous}?'))
+GENERIC_TAKES = (('BE HONEST', 'Who was actually right here?'),
+                 ('DEBATE', 'Was this out of line or fair?'),
+                 ('HOT TAKE', 'Chat overreacted to this. Agree?'))
+
+
+def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool = True) -> ContextHook:
+    """A debate prompt over the clip's own words, or an opinion question about the game.
+
+    Template-based, not an LLM. ``key`` keeps the choice stable when a clip is re-rendered.
+    The text is a suggestion for human review before anything is published.
+    """
+    pick = zlib.crc32(key.encode('utf-8'))
+    # ``quote=False`` when the speech is unreliable, such as a language Whisper was unsure of.
+    spoken = suggest_hook(transcript) if quote else ContextHook()
+    if spoken.text:
+        return ContextHook(spoken.text, spoken.evidence, 'debate_quote_v1', QUOTE_LABELS[pick % len(QUOTE_LABELS)])
+    name = clean_text(topic)
+    if name and name.casefold() not in NOT_A_GAME:
+        game = SHORT_GAME.get(name.casefold(), name)
+        takes = GAME_TAKES if game == 'GTA 6' else GAME_TAKES[:4]
+        label, text = takes[pick % len(takes)]
+        text = text.format(game=game, previous='GTA 5')
+        if len(text) <= MAX_HOOK_LENGTH:
+            return ContextHook(text, '', 'debate_topic_v1', label)
+    label, text = GENERIC_TAKES[pick % len(GENERIC_TAKES)]
+    return ContextHook(text, '', 'debate_generic_v1', label)

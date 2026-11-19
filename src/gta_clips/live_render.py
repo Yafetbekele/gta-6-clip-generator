@@ -133,7 +133,7 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
         # render() cuts the exact 60 seconds and rejects a section that is still too short.
         transcript = render(source, working, config.paths.data_dir / relative,
                             Moment(before, length, burst["messages"]), burst["streamer"],
-                            config.editing, transcriber, details)
+                            config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id)
         metadata = generate(transcript, burst["game_name"], burst["streamer"], vod_id, start)
         with connect(config.paths.database) as db:
             db.execute("INSERT OR IGNORE INTO vods(id, streamer, status) VALUES (?, ?, 'live-window')",

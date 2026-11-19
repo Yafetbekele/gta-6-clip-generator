@@ -25,8 +25,9 @@ def caption_data(words: list[Word], duration: float) -> list[dict]:
 
 
 def render_polished(source: Path, working: Path, target: Path, moment, streamer: str,
-                    words: list[Word], ffmpeg: str, hook_text: str | None = None):
-    hook = suggest_hook(' '.join(word.text for word in words)) if hook_text is None else manual_hook(hook_text)
+                    words: list[Word], ffmpeg: str, hook_text: str | None = None, *, hook=None):
+    if hook is None:
+        hook = suggest_hook(' '.join(word.text for word in words)) if hook_text is None else manual_hook(hook_text)
     project = Path(os.environ.get("REMOTION_PROJECT", Path(__file__).resolve().parents[2] / "remotion")).resolve()
     node = shutil.which("node")
     if not node or not (project / "node_modules" / "@remotion" / "renderer").exists():

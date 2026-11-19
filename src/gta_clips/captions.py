@@ -50,7 +50,9 @@ def _escape(text: str) -> str:
     return " ".join(text.translate(str.maketrans({"\\": "＼", "{": "｛", "}": "｝"})).split())
 
 
-def write_ass(path: Path, words: list[Word], streamer: str, duration: float):
+def write_ass(path: Path, words: list[Word], streamer: str, duration: float, hook=None,
+              hook_bottom: int | None = None):
+    """``hook`` is a ContextHook headline for the whole clip, its last line ending at ``hook_bottom``."""
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -62,12 +64,23 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,85,120,340,1
 Style: Credit,Arial,37,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,7,75,110,110,1
+Style: Hook,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,70,70,200,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     total = round(duration * 100)
     events = [f"Dialogue: 0,0:00:00.00,{_time(total)},Credit,,0,0,0,,@{_escape(streamer)} on Twitch"]
+    if hook is not None and hook.text:
+        text = _escape(hook.text)
+        if hook.method.endswith("quote_v1"):
+            text = f"“{text}”"
+        if hook.label:
+            # The label sits on its own line in the accent colour, above the take itself.
+            text = r"{\fs46\c&H0058FFC4&}" + _escape(hook.label) + r"{\r}\N" + text
+        if hook_bottom:
+            text = rf"{{\an2\pos(540,{hook_bottom})}}" + text
+        events.append(f"Dialogue: 1,0:00:00.00,{_time(total)},Hook,,0,0,0,,{text}")
     groups = []
     group = []
     for word in words:

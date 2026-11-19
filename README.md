@@ -45,6 +45,15 @@ up to seven seconds and stays above the video, separate from speech captions.
 Its text, source quote, and caption timings are saved beside the MP4 in `.edit.json`.
 The review page displays the actual opening text when this manifest is available.
 
+Both renderers also add a debate headline: a short accent label such as "HOT TAKE
+OR FACTS?" over the clip's own quoted line, or, when Whisper is not confident the
+speech is English or no good line exists, an opinion question about the Twitch
+category (for example "GTA 6 is overhyped. Change my mind."). These come from fixed
+templates, not an AI model. They are opinions about the game or prompts over the
+streamer's own words, never claims about the streamer, and like everything else
+they are only published after you approve the clip. The FFmpeg renderer keeps the
+headline on screen for the whole clip, just above the full-width video.
+
 For an existing pending clip:
 
 ```text
@@ -55,7 +64,7 @@ gta-clips queue hook CLIP_ID --clear
 ```
 
 Only `--suggest-only` avoids rendering. The other commands fetch the original VOD
-window and render a new Remotion version, so its VOD must still be available.
+window and render a new version with the configured renderer, so its VOD must still be available.
 The original video and ratings remain saved, and the queue switches to the new
 video only after success. Approved clips or clips with upload records cannot be
 re-edited this way. Preview the replacement before approving it. Refresh the review

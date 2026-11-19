@@ -9,6 +9,7 @@ import av
 
 from .captions import Transcriber, write_ass
 from .config import EditingConfig, Crop
+from .context_text import debate_hook, manual_hook
 from .diagnostics import CommandFailed, run
 from .download import ffmpeg_binary
 from .highlights import Moment
@@ -50,12 +51,27 @@ def max_source_height(settings: EditingConfig) -> int | None:
 FRAME_TOLERANCE = 1.5 / 30
 
 
+def _video_top(source: Path) -> int:
+    """Where the fit layout places the top edge of the full, uncropped frame."""
+    with av.open(str(source)) as media:
+        stream = media.streams.video[0]
+        width, height = stream.width, stream.height
+    if not width or not height:
+        return 0
+    scaled = min(1920, 1080 * height / width)
+    return int((1920 - scaled) // 2)
+
+
 def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
     settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
-    *, hook_text: str | None = None,
+    *, hook_text: str | None = None, topic: str = "", hook_key: str = "",
 ) -> str:
-    """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts."""
+    """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts.
+
+    Without ``hook_text`` a debate prompt is generated from the speech and ``topic``
+    (the Twitch category); ``hook_text=""`` renders no headline.
+    """
     ffmpeg = ffmpeg_binary()
     audio = working / "speech.wav"
     # Output-side -ss/-t decode from the previous keyframe and cut on the exact frame.
@@ -71,12 +87,19 @@ def render(
             raise
         words = []
     transcribed = time.monotonic()
+    # Quote only confidently English speech; labels are English and garbled quotes look broken.
+    english = (getattr(transcriber, "language", None) == "en"
+               and (getattr(transcriber, "language_probability", None) or 0) >= 0.7)
+    hook = (debate_hook(" ".join(w.text for w in words), topic, hook_key or streamer, quote=english)
+            if hook_text is None else manual_hook(hook_text))
     if settings.renderer == "remotion":
         from .remotion_render import render_polished
         temporary = working / "rendered.mp4"
-        render_polished(source, working, temporary, moment, streamer, words, ffmpeg, hook_text)
+        render_polished(source, working, temporary, moment, streamer, words, ffmpeg, hook=hook)
     else:
-        write_ass(working / "captions.ass", words, streamer, moment.duration)
+        hook_bottom = _video_top(source) - 30 if settings.layout == "fit" else None
+        write_ass(working / "captions.ass", words, streamer, moment.duration, hook,
+                  hook_bottom if hook_bottom and hook_bottom >= 420 else None)
         split = settings.streamers.get(streamer) if settings.layout == "split" else None
         # Dropping to 30 fps first halves the scaling work for 60 fps sources.
         if split:
@@ -108,7 +131,11 @@ def render(
         manifest = json.loads((working / "remotion-job.json").read_text(encoding="utf-8"))
         manifest.pop("source", None)
         manifest["schema_version"] = 1
-        target.with_suffix('.edit.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    else:
+        manifest = {"schema_version": 1, "renderer": "ffmpeg", "streamer": streamer,
+                    "durationSeconds": moment.duration, "hook": hook.to_dict()}
+    # The review page reads the hook from here.
+    target.with_suffix('.edit.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(target)
     if details is not None:
         details.update(

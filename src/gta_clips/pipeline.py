@@ -48,7 +48,8 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
             relative = Path("clips") / f"{clip_id}.mp4"
             details = {}
             transcript = render(source, clip_dir, base / relative, moment, vod.streamer,
-                                config.editing, transcriber, details)
+                                config.editing, transcriber, details, topic=config.twitch.game_name,
+                                hook_key=clip_id)
             metadata = generate(transcript, config.twitch.game_name, vod.streamer, vod.id, moment.start)
             # Save each clip as soon as it exists, so a later failure does not discard it.
             with connect(config.paths.database) as db:

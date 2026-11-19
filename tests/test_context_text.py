@@ -54,7 +54,7 @@ class HookEditTest(unittest.TestCase):
         with patch('gta_clips.hook_edit.download_vod') as download:
             hook = edit_hook(self.config, 'clip', suggest_only=True)
         download.assert_not_called()
-        self.assertEqual(hook.method, 'transcript_quote_v1')
+        self.assertEqual(hook.method, 'debate_quote_v1')
         self.assertEqual(self.state()['path'], 'original.mp4')
 
     def test_approved_clip_is_not_edited(self):

@@ -4,13 +4,13 @@ import type {Caption} from '@remotion/captions';
 import {fillTextBox} from '@remotion/layout-utils';
 import {useMemo} from 'react';
 
-type HookData = {text: string; evidence: string; method: string};
+type HookData = {text: string; evidence: string; method: string; label?: string};
 export type ClipProps = {source: string; streamer: string; durationSeconds: number; captions: Caption[]; hook?: HookData};
 
 const ContextText = ({hook}: {hook?: HookData}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const text = hook?.method === 'transcript_quote_v1' ? `“${hook.text}”` : hook?.text || '';
+  const text = hook?.method?.endsWith('quote_v1') ? `“${hook.text}”` : hook?.text || '';
   const fontSize = useMemo(() => {
     for (let size = 60; size >= 32; size -= 2) {
       const box = fillTextBox({maxBoxWidth: 820, maxLines: 3});
@@ -25,6 +25,8 @@ const ContextText = ({hook}: {hook?: HookData}) => {
     overflowWrap: 'anywhere',
     opacity: interpolate(frame, [0, 0.3 * fps, 6.6 * fps, 7 * fps], [0, 1, 1, 0],
       {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>
+    {hook.label ? <div style={{fontSize: 34, letterSpacing: 2, color: '#c4ff58', marginBottom: 10}}>
+      {hook.label}</div> : null}
     {text}
   </Interactive.Div>;
 };
@@ -78,7 +80,8 @@ export const PolishedClip = ({source, streamer, captions, hook}: ClipProps) => (
       fontSize: 26, letterSpacing: 6, color: '#c4ff58', fontWeight: 700}}>STREAM HIGHLIGHT</Interactive.Div>
     <Credit streamer={streamer} />
     <ContextText hook={hook} />
-    <div style={{position: 'absolute', left: 40, top: 560, width: 1000, height: 680,
+    {/* Full frame width: the whole stream stays visible at the largest uncropped size. */}
+    <div style={{position: 'absolute', left: 0, top: 560, width: 1080, height: 680,
       backgroundColor: '#000000', boxShadow: '0 30px 100px #00000080'}}>
       {source ? <Video name="Full stream frame" src={staticFile(source)}
         style={{width: '100%', height: '100%'}} objectFit="contain" /> :
