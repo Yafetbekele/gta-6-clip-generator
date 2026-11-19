@@ -2,6 +2,7 @@
 /.env.*
 !/.env.example
 /config.toml
+/browser-upload.json
 /data/
 /.venv/
 __pycache__/

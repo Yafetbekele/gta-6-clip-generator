@@ -1,0 +1,94 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account
+
+
+NOTE = '''Channel: Test (test)
+Post to:
+  YouTube: test, on private@example.com
+Sign-in email: secret@example.com
+
+Title:
+A funny moment | @streamer
+
+Description:
+A gaming moment.
+@streamer on Twitch
+https://www.twitch.tv/streamer
+
+Hashtags:
+#Gaming #Shorts
+
+Clip ID: test-clip-1
+'''
+
+
+class BrowserUploadTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.folder = self.root / '2026-11-19' / 'test'
+        self.folder.mkdir(parents=True)
+        self.video = self.folder / 'clip.mp4'
+        self.video.write_bytes(b'fake video')
+        self.video.with_suffix('.txt').write_text(NOTE, encoding='utf-8')
+        self.db = ledger(self.root / 'posts.sqlite3')
+        self.addCleanup(self.db.close)
+
+    def test_only_public_sections_are_uploaded(self):
+        clip, = scan(self.root, 'test')
+        self.assertNotIn('example.com', clip.description)
+        self.assertNotIn('Sign-in', clip.description)
+        self.assertIn('https://www.twitch.tv/streamer', clip.description)
+        self.assertEqual(scan(self.root, 'other'), [])
+
+    def test_missing_credit_and_bad_metadata_stop(self):
+        self.video.with_suffix('.txt').write_text(NOTE.replace('https://www.twitch.tv/streamer', ''), encoding='utf-8')
+        with self.assertRaises(ValueError):
+            scan(self.root, 'test')
+
+    def test_claim_survives_crash_and_blocks_renamed_file(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        self.assertTrue(exists(self.db, 'youtube', 'test', clip))
+        self.video.rename(self.folder / 'renamed.mp4')
+        self.video.with_suffix('.txt').rename(self.folder / 'renamed.txt')
+        renamed, = scan(self.root, 'test')
+        renamed.clip_id = 'different-id-same-bytes'
+        self.assertTrue(exists(self.db, 'youtube', 'test', renamed))
+        self.assertFalse(exists(self.db, 'tiktok', 'test', renamed))
+        self.assertEqual(self.db.execute('select state from posts').fetchone()[0], 'held')
+
+    def test_posted_state_retains_receipt(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        finish(self.db, 'youtube', 'test', clip, 'posted', 'https://youtube.com/shorts/example')
+        row = self.db.execute('select * from posts').fetchone()
+        self.assertEqual(row['state'], 'posted')
+        self.assertIn('/shorts/', row['url'])
+
+    def test_spacing_and_rolling_daily_limit_include_held(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        self.db.execute('update posts set started=100000')
+        self.db.commit()
+        self.assertFalse(allowed(self.db, 'youtube', 'test', 4, 3600, 100001))
+        self.assertTrue(allowed(self.db, 'youtube', 'test', 4, 3600, 103601))
+        self.assertFalse(allowed(self.db, 'youtube', 'test', 1, 0, 103601))
+        self.assertTrue(allowed(self.db, 'youtube', 'test', 1, 0, 186401))
+        self.assertFalse(allowed(self.db, 'youtube', 'test', 0, 0, 186401))
+
+    def test_wrong_youtube_channel_is_rejected(self):
+        class Page:
+            url = 'https://studio.youtube.com/channel/WRONG'
+            def goto(self, *args, **kwargs): pass
+            def wait_for_url(self, *args, **kwargs): pass
+        with self.assertRaisesRegex(RuntimeError, 'does not match'):
+            verify_account(Page(), 'youtube', {'channel_id': 'EXPECTED'})
+
+
+if __name__ == '__main__':
+    unittest.main()

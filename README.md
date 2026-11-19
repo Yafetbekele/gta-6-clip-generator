@@ -227,3 +227,6 @@ Keep OAuth callback URLs, credentials, tokens, media, and the SQLite database pr
 | `oauth.py`, `upload/`, and `scheduler.py` | Authorize accounts, checkpoint official API uploads, and enforce the selected schedule. |
 | `live.py` and `live_render.py` | Count live chat bursts and render the matching 60-second VOD sections for review. |
 | `runner.py`, `dashboard.py`, and `settings_edit.py` | Run workers on the `[runtime]` schedule, serve the local dashboard, and save setting changes. |
+# Optional browser uploads
+
+For uploading ready-folder clips without API keys using a dedicated browser login, see [BROWSER-UPLOAD.md](BROWSER-UPLOAD.md). Includes YouTube, TikTok and Instagram adapters, a local duplicate ledger, and posting limits. Live validation of the new browser adapters is still required.
