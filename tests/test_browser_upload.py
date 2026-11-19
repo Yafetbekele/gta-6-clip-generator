@@ -1,8 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account
+from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile
 
 
 NOTE = '''Channel: Test (test)
@@ -44,6 +45,15 @@ class BrowserUploadTests(unittest.TestCase):
         self.assertNotIn('Sign-in', clip.description)
         self.assertIn('https://www.twitch.tv/streamer', clip.description)
         self.assertEqual(scan(self.root, 'other'), [])
+
+    def test_login_opens_normal_chrome_in_isolated_profile(self):
+        with patch('gta_clips.browser_upload.chrome_executable', return_value=Path('chrome.exe')), \
+                patch('gta_clips.browser_upload.subprocess.Popen') as launch:
+            open_normal_chrome(self.root, 'youtube', 'test')
+        self.assertEqual(launch.call_args.args[0], [
+            'chrome.exe', f'--user-data-dir={chrome_profile(self.root, "youtube", "test").resolve()}',
+            '--new-window', 'https://studio.youtube.com/',
+        ])
 
     def test_missing_credit_and_bad_metadata_stop(self):
         self.video.with_suffix('.txt').write_text(NOTE.replace('https://www.twitch.tv/streamer', ''), encoding='utf-8')

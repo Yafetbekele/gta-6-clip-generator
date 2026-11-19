@@ -23,7 +23,7 @@ if __name__ == '__main__':
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
     account = choose('Account folder', list(config['accounts']))
     platform = choose('Platform', list(config['accounts'][account]))
-    action = choose('Action', ['preview', 'login', 'status', 'publish one'])
+    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login'])
     argv = ['--settings', str(settings), '--account', account, '--platform', platform]
     if action == 'publish one':
         print('This publishes the next eligible ready-folder video using the saved title and caption.')

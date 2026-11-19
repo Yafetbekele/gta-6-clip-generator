@@ -24,7 +24,13 @@ For a menu instead of commands, double-click **Browser Uploader.cmd** in the pro
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform instagram --account gta6-2
 ```
 
-Sign in manually in the browser that opens, select the intended channel, then press Enter in the terminal. Normal Chrome logins are not copied or extracted. Use English site UI. The program checks the Studio channel ID or the site's authenticated Profile link on every upload. If the site doesn't expose that link, it stops; the adapter needs an update.
+Login now opens **installed Google Chrome normally**, using a dedicated profile under `data/browser-upload/chrome-profiles/PLATFORM/ACCOUNT`. Sign in manually and select the intended channel, then close that dedicated Chrome window completely. Choose **5 — verify-login** in the launcher next (or run the command below). Verification reopens the same profile with Playwright using installed Chrome and checks the account without uploading. Google may still block or reverify that session; this is a test, not a guaranteed fix. No security settings or automation-detection flags are changed. Existing personal Chrome logins are not copied or extracted. Old bundled Chromium profiles are left untouched.
+
+```powershell
+.\.venv\Scripts\python.exe -m gta_clips.browser_upload verify-login --platform youtube --account gta6-2
+```
+
+Use English site UI. The program checks the Studio channel ID or the site's authenticated Profile link on every upload. If the site doesn't expose that link, it stops; the adapter needs an update. Keep the dedicated profile closed whenever running verification or uploads; do not close your unrelated personal Chrome windows.
 
 ## Preview and publish
 

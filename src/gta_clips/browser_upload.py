@@ -3,8 +3,10 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,6 +182,32 @@ def instagram(page, clip, publish):
 ADAPTERS = {"youtube": youtube, "tiktok": tiktok, "instagram": instagram}
 
 
+def chrome_executable():
+    for variable, suffix in (("PROGRAMFILES", "Google/Chrome/Application/chrome.exe"),
+                             ("PROGRAMFILES(X86)", "Google/Chrome/Application/chrome.exe"),
+                             ("LOCALAPPDATA", "Google/Chrome/Application/chrome.exe")):
+        if os.environ.get(variable):
+            candidate = Path(os.environ[variable]) / suffix
+            if candidate.is_file():
+                return candidate
+    raise RuntimeError("Google Chrome is not installed in a standard location")
+
+
+def chrome_profile(state, platform, account):
+    return state / "chrome-profiles" / platform / account
+
+
+def open_normal_chrome(state, platform, account):
+    profile = chrome_profile(state, platform, account).resolve()
+    profile.mkdir(parents=True, exist_ok=True)
+    # Normal interactive Chrome: no debugging port, automation flags or cookie copying.
+    subprocess.Popen([str(chrome_executable()), f"--user-data-dir={profile}",
+                      "--new-window", START[platform]])
+    print("Opened normal Chrome with a dedicated uploader profile.")
+    print("Sign in and select your channel. Then CLOSE this Chrome window completely.")
+    print("Choose verify-login in the launcher next. Signing in alone does not verify the uploader.")
+
+
 def settings(path, account, platform):
     config = json.loads(path.read_text(encoding="utf-8-sig"))
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", account):
@@ -195,7 +223,7 @@ def settings(path, account, platform):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("preview", "login", "run", "status", "record-posted", "release"))
+    parser.add_argument("action", choices=("preview", "login", "verify-login", "run", "status", "record-posted", "release"))
     parser.add_argument("--settings", type=Path, default=Path("browser-upload.json"))
     parser.add_argument("--account", required=True)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
@@ -231,6 +259,9 @@ def main(argv=None):
 
 def execute(args, config, target, state, root, db, daily, spacing):
     platform, account = args.platform, args.account
+    if args.action == "login":
+        open_normal_chrome(state, platform, account)
+        return 0
     if args.action == "status":
         for row in db.execute("SELECT clip_id,state,url,detail FROM posts WHERE platform=? AND account=?", (platform, account)):
             print(json.dumps(dict(row)))
@@ -243,7 +274,7 @@ def execute(args, config, target, state, root, db, daily, spacing):
                                (platform, account, args.clip_id)).rowcount
         print(f"Released {count} held record(s)")
         return 0
-    clips = scan(root, account) if args.action != "login" else []
+    clips = scan(root, account) if args.action != "verify-login" else []
     if args.clip_id:
         clips = [clip for clip in clips if clip.clip_id == args.clip_id]
         if not clips:
@@ -271,17 +302,16 @@ def execute(args, config, target, state, root, db, daily, spacing):
     except ImportError:
         raise RuntimeError('Install with: pip install -e ".[browser]" and python -m playwright install chromium') from None
     with sync_playwright() as pw:
-        profile = state / "profiles" / platform / account
-        context = pw.chromium.launch_persistent_context(str(profile), headless=False, locale="en-US",
+        profile = chrome_profile(state, platform, account)
+        print("Close the dedicated login window before continuing; Chrome cannot share an open profile.", flush=True)
+        context = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False, locale="en-US",
                                                        viewport={"width": 1440, "height": 1000})
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(30_000)
-            if args.action == "login":
-                page.goto(START[platform])
-                input("Sign in and select the intended channel in this browser. Press Enter here when finished: ")
+            if args.action == "verify-login":
                 verify_account(page, platform, target)
-                print("Verified account. Login is saved locally in the dedicated browser profile.")
+                print("Verified account in automated Chrome. No files uploaded.")
                 return 0
             done = 0
             for clip in clips:
