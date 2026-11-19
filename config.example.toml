@@ -91,3 +91,6 @@ min_spacing_minutes = 120
 # category = "Grand Theft Auto VI"
 # language = "en"          # Twitch stream language; leave out for any language
 # channels = 5             # live channels this set adds to the watch list (1 to 20)
+# youtube = "GTA 6 Clips"  # optional: where to post this set's clips by hand, shown in
+# tiktok = "gta_clips"     #   each ready-to-post .txt file (names only, never passwords)
+# instagram = "gta_clips"

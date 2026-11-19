@@ -52,7 +52,9 @@ def _safe(text: str, limit: int = 60) -> str:
 
 
 def _note(account, clip) -> str:
-    return (f"Channel: {account.title} ({account.name})\n\n"
+    post_to = "".join(f"  {platform}: {handle}\n" for platform, handle in account.destinations)
+    return (f"Channel: {account.title} ({account.name})\n"
+            + (f"Post to:\n{post_to}" if post_to else "") + "\n"
             f"Title:\n{clip['title']}\n\n"
             f"Description:\n{clip['description']}\n\n"
             f"Hashtags:\n{clip['hashtags']}\n\n"
@@ -96,6 +98,21 @@ def export_due(config: Config, now: float | None = None) -> list[Path]:
             added.append(target)
             wanted -= 1
     return added
+
+
+def rewrite_notes(config: Config):
+    """Refresh the .txt beside each clip still in the folder, so edited account names show up."""
+    names = {account.name: account for account in config.accounts}
+    base = config.paths.data_dir
+    with connect(config.paths.database) as db:
+        rows = db.execute("""SELECT e.account, e.path, c.id, c.title, c.description, c.hashtags
+                             FROM ready_exports e JOIN clips c ON c.id = e.clip_id""").fetchall()
+    for row in rows:
+        note = (base / row["path"]).with_suffix(".txt")
+        if row["account"] in names and note.is_file():
+            text = _note(names[row["account"]], row)
+            if note.read_text(encoding="utf-8") != text:
+                note.write_text(text, encoding="utf-8")
 
 
 def cleanup(config: Config, keep_days: int = 7):

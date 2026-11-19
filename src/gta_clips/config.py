@@ -149,10 +149,19 @@ class AccountConfig:
     language: str = ""
     channels: int = 5
     label: str = ""
+    # Where this set's clips are posted, for people posting by hand. Names only, never logins.
+    youtube: str = ""
+    tiktok: str = ""
+    instagram: str = ""
 
     @property
     def title(self) -> str:
         return self.label or self.name
+
+    @property
+    def destinations(self) -> tuple[tuple[str, str], ...]:
+        return tuple((platform, handle) for platform, handle in
+                     (("YouTube", self.youtube), ("TikTok", self.tiktok), ("Instagram", self.instagram)) if handle)
 
 
 @dataclass(frozen=True)
@@ -390,11 +399,17 @@ def _accounts(raw: object) -> tuple[AccountConfig, ...]:
         label = options.get("label", "")
         if not isinstance(label, str) or "\n" in label:
             raise ConfigError(f"{path}.label must be a single line of text")
+        handles = {}
+        for platform in ("youtube", "tiktok", "instagram"):
+            handle = options.get(platform, "")
+            if not isinstance(handle, str) or "\n" in handle or len(handle) > 100:
+                raise ConfigError(f"{path}.{platform} must be a channel or account name on one line")
+            handles[platform] = handle.strip()
         accounts.append(AccountConfig(
             name=name, category=_text(options.get("category"), f"{path}.category"),
             language=language.strip().lower(),
             channels=_integer(options.get("channels", 5), f"{path}.channels", 1, 20),
-            label=label.strip(),
+            label=label.strip(), **handles,
         ))
     total = sum(account.channels for account in accounts)
     if total > MAX_TOTAL_CHANNELS:
