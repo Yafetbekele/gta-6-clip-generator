@@ -424,6 +424,11 @@ function renderAccounts() {
     {label: 'Approved', num: true, value: r => num(r.approved)},
     {label: 'Last 24h', num: true, value: r => num(r.today)},
     {label: 'Logins', value: logins},
+    {label: 'Posts to', wrap: true, value: r => {
+      const names = Object.entries(r.destinations || {}).map(([platform, handle]) => platform + ': ' + handle);
+      if (r.email) names.push(r.email);
+      return names.length ? el('span', {class: 'small'}, names.join(' · ')) : el('span', {class: 'muted small'}, 'not filled in');
+    }},
   ], data.accounts || [], 'No account sets yet. Add [[accounts]] to config.toml.');
 }
 

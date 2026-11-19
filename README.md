@@ -173,6 +173,10 @@ label = "IRL Spanish"
 category = "Just Chatting"
 language = "es"          # Twitch stream language; leave empty for any language
 channels = 5
+email = ""               # optional: the set's sign-in email, shown in ready-to-post notes
+youtube = ""             # optional: where its clips go, shown in ready-to-post notes
+tiktok = ""
+instagram = ""
 ```
 
 - Sets with the same category and language share one group of channels. Three English GTA 6 sets with 5 channels each watch 15 GTA 6 channels together. Each new clip window goes to the set in that group with the fewest windows so far, so a clip belongs to exactly one set and is never posted twice.
@@ -181,6 +185,15 @@ channels = 5
 - Connect each set's logins with `gta-clips auth youtube --account NAME`, and the same for `tiktok` and `instagram`. A set only publishes with its own logins. `gta-clips auth youtube` without `--account` is the login for clips made before account sets. Twitch chat uses one login for everything.
 - `gta-clips accounts` lists each set with its clips to review, approved clips, clips waiting for a VOD and connected logins. The dashboard's **Accounts** tab and the review page's account filter show the same.
 - `gta-clips accounts sort` assigns earlier clip windows and clips to a set when their category and stream language match one, and moves their files into the set's folder. Clips that already have an upload record and all ratings stay as they are.
+
+## Ready to post by hand
+
+`gta-clips ready` (run by `gta-clips run` every `runtime.ready_every_minutes`, 30 by default) copies the strongest recent clips of each account set into `ready-to-post/<day>/<set name>/` inside the storage directory. Nothing is uploaded: you watch each clip and post it yourself.
+
+- Each set gets up to `runtime.ready_per_day` clips a day (6 by default), spread through the day: one after midnight, then one more every 24 / `ready_per_day` hours.
+- Clips you rated 4 or 5 come first; clips rated 1 or 2, rejected clips and clips older than three days are left out. Then chat bursts come before comparison clips, and a bigger jump over the channel's normal chat rate before a smaller one. These are recorded signals, not a trained model.
+- Each video has a `.txt` beside it with the title, description and hashtags, and the set's `youtube`, `tiktok`, `instagram` and `email` names when they are filled in. Never put passwords in the config.
+- The videos are copies; the originals stay in `clips/`. Day folders older than a week are removed.
 
 ## Authorize platform access
 

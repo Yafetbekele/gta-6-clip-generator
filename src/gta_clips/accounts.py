@@ -32,6 +32,7 @@ def summary(config: Config) -> list[dict]:
         rows.append({
             "name": account.name, "title": account.title, "category": account.category,
             "language": account.language, "channels": account.channels, **clips,
+            "email": account.email, "destinations": dict(account.destinations),
             # Sets with the same category and language watch one shared group of channels.
             "feed_channels": feeds[account.name].channels, "shared_with": len(feeds[account.name].accounts),
             "waiting": waiting.get(account.name, 0),
