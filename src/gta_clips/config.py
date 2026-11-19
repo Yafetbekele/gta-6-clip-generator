@@ -153,6 +153,8 @@ class AccountConfig:
     youtube: str = ""
     tiktok: str = ""
     instagram: str = ""
+    # The sign-in email for these accounts, shown in notes. Never a password.
+    email: str = ""
 
     @property
     def title(self) -> str:
@@ -399,8 +401,8 @@ def _accounts(raw: object) -> tuple[AccountConfig, ...]:
         label = options.get("label", "")
         if not isinstance(label, str) or "\n" in label:
             raise ConfigError(f"{path}.label must be a single line of text")
-        handles = {}
-        for platform in ("youtube", "tiktok", "instagram"):
+        handles = {}  # Names and emails only; passwords never belong in the config.
+        for platform in ("youtube", "tiktok", "instagram", "email"):
             handle = options.get(platform, "")
             if not isinstance(handle, str) or "\n" in handle or len(handle) > 100:
                 raise ConfigError(f"{path}.{platform} must be a channel or account name on one line")

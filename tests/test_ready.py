@@ -30,7 +30,7 @@ class ExportTest(unittest.TestCase):
         base = load_config(ROOT / "config.example.toml")
         self.config = replace(base, paths=PathsConfig(Path(folder.name)),
                               accounts=(AccountConfig("gta6-1", "Grand Theft Auto VI", label="GTA 6", youtube="GTA 6 Clips",
-                                                      tiktok="gta_clips"),
+                                                      tiktok="gta_clips", email="clips@example.com"),
                                         AccountConfig("irl-en", "Just Chatting", "en")))
         self.now = datetime(2026, 11, 19, 23, 0).timestamp()
         with connect(self.config.paths.database) as db:
@@ -76,7 +76,7 @@ class ExportTest(unittest.TestCase):
         folder = self.config.paths.data_dir / FOLDER / "2026-11-19" / "gta6-1"
         self.assertEqual({path.parent for path in added}, {folder})
         note = added[0].with_suffix(".txt").read_text(encoding="utf-8")
-        self.assertIn("Channel: GTA 6 (gta6-1)\nPost to:\n  YouTube: GTA 6 Clips\n  TikTok: gta_clips\n\n", note)
+        self.assertIn("Channel: GTA 6 (gta6-1)\nPost to:\n  YouTube: GTA 6 Clips\n  TikTok: gta_clips\nSign-in email: clips@example.com\n\n", note)
         self.assertNotIn("Instagram", note)
         self.assertIn("Title loved", note)
         self.assertIn("#gta6", note)

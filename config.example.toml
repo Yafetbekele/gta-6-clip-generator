@@ -94,3 +94,4 @@ min_spacing_minutes = 120
 # youtube = "GTA 6 Clips"  # optional: where to post this set's clips by hand, shown in
 # tiktok = "gta_clips"     #   each ready-to-post .txt file (names only, never passwords)
 # instagram = "gta_clips"
+# email = "you@example.com" # optional: the sign-in email for this set, shown in notes

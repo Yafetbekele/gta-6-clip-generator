@@ -54,7 +54,8 @@ def _safe(text: str, limit: int = 60) -> str:
 def _note(account, clip) -> str:
     post_to = "".join(f"  {platform}: {handle}\n" for platform, handle in account.destinations)
     return (f"Channel: {account.title} ({account.name})\n"
-            + (f"Post to:\n{post_to}" if post_to else "") + "\n"
+            + (f"Post to:\n{post_to}" if post_to else "")
+            + (f"Sign-in email: {account.email}\n" if account.email else "") + "\n"
             f"Title:\n{clip['title']}\n\n"
             f"Description:\n{clip['description']}\n\n"
             f"Hashtags:\n{clip['hashtags']}\n\n"
