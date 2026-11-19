@@ -117,6 +117,11 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS channel_snapshots_streamer ON channel_snapshots(streamer, ts)
         """,
     ),
+    (
+        # The account set a window or clip belongs to. NULL for clips made before account sets.
+        [("live_bursts", "account", "TEXT"), ("clips", "account", "TEXT")],
+        "CREATE INDEX IF NOT EXISTS clips_account ON clips(account, state)",
+    ),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

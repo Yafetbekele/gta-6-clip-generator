@@ -112,6 +112,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     board.add_argument("--open", action="store_true", dest="open_browser")
     auth = commands.add_parser("auth", help="Authorize Twitch chat or a publishing account")
     auth.add_argument("platform", choices=("twitch", *PLATFORMS))
+    auth.add_argument("--account", help="Account set name from [[accounts]], such as gta6-1")
+    accounts = commands.add_parser("accounts", help="List account sets, or sort earlier clips into them")
+    accounts.add_argument("action", nargs="?", choices=("list", "sort"), default="list")
     retry = commands.add_parser("retry", help="Return a failed upload to its platform queue")
     retry.add_argument("platform", choices=PLATFORMS)
     retry.add_argument("clip_id")
@@ -125,12 +128,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "check-config":
         destinations = [platform for platform, settings in config.schedule.items() if settings.daily_limit]
-        print(f"Configuration is valid for {config.twitch.game_name}.")
-        streamers = ("all channels in this category" if config.twitch.all_streamers
+        categories = ", ".join(dict.fromkeys(feed.category for feed in config.feeds))
+        print(f"Configuration is valid for {categories}.")
+        streamers = ("all channels in each category" if config.accounts or config.twitch.all_streamers
                      else ", ".join(config.twitch.streamers) or "none configured")
         print(f"Twitch discovery: {streamers}")
-        print(f"Live chat watcher: up to {config.live.max_channels} channels, "
+        print(f"Live chat watcher: up to {config.total_channels} channels, "
               f"bursts at {config.live.spike_multiplier:g}x the normal chat rate (run watch-live to start)")
+        for account in config.accounts:
+            print(f"  Account set {account.name}: {account.category} "
+                  f"({account.language or 'any language'}), {account.channels} channels")
         print(f"Storage: {config.paths.data_dir}")
         print(f"Enabled posting destinations: {', '.join(destinations) or 'none'}")
         return 0
@@ -161,6 +168,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .runner import run
             run(args.config)
             return 0
+        if args.command == "accounts":
+            from .accounts import print_summary, sort_existing
+            if args.action == "sort":
+                moved = sort_existing(config)
+                print(f'Assigned {moved["windows"]} windows ({moved["clips"]} clips) to account sets and '
+                      f'moved {moved["moved"]} clip files into account folders.'
+                      + (f' {moved["missing"]} clip files were missing.' if moved["missing"] else ""))
+            print_summary(config)
+            return 0
         if args.command == "ingest":
             from .pipeline import ingest
             return ingest(config)
@@ -181,8 +197,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "auth":
             from .oauth import authorize
             name = "watch-live" if args.platform == "twitch" else "publish"
+            if args.account and config.account(args.account) is None:
+                names = ", ".join(account.name for account in config.accounts) or "none configured"
+                parser.exit(2, f"No account set named {args.account} (account sets: {names})\n")
             with worker_lock(config.paths.data_dir, name):
-                authorize(config.paths.database, args.platform)
+                authorize(config.paths.database, args.platform, args.account)
         elif args.command == "retry":
             from .scheduler import retry_failed
             retry_failed(config, args.platform, args.clip_id)

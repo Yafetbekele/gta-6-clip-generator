@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
+from threading import Barrier
 import subprocess
 import time
 import unittest
 
-from gta_clips.config import LiveConfig, PathsConfig, load_config
+from gta_clips.config import ConfigError, LiveConfig, PathsConfig, load_config
 from gta_clips.db import connect
 from gta_clips.diagnostics import CommandFailed
 from gta_clips.download import VodUnavailable
@@ -248,6 +249,59 @@ class RenderRetryTest(unittest.TestCase):
     def test_unexpected_subprocess_error_is_retried(self):
         row = self._run(side_effect=subprocess.TimeoutExpired("yt-dlp", 300))
         self.assertEqual((row["state"], row["attempts"]), ("waiting", 1))
+
+
+
+class ParallelRenderTest(unittest.TestCase):
+    def setUp(self):
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.anchor = int(time.time()) - 120
+        self.start = self.anchor - 75
+        self.folder = folder.name
+
+    def _render_two(self, workers: int):
+        config = _config(self.folder, render_workers=workers)
+        videos = {}
+        for stream, broadcaster, login in (("12", "42", "first"), ("13", "43", "second")):
+            record_burst(config, Broadcast(stream, broadcaster, login, self.start), self.anchor, 22)
+            videos[broadcaster] = {"stream_id": stream, "id": stream + "9", "duration": "3m", "viewable": "public",
+                                   "created_at": datetime.fromtimestamp(self.start, timezone.utc).isoformat()}
+        both_started = Barrier(2, timeout=5)
+        transcribers = []
+
+        def render(*args, **kwargs):
+            transcribers.append(args[6])
+            if workers > 1:
+                both_started.wait()  # Times out unless the two clips render at the same time.
+            return "words"
+
+        with patch("gta_clips.live_render.Twitch") as twitch, \
+                patch("gta_clips.live_render.download_vod"), \
+                patch("gta_clips.live_render.render", side_effect=render):
+            twitch.return_value.get.side_effect = lambda _, params: {"data": [videos[params["user_id"]]]}
+            render_due(config)
+        with connect(config.paths.database) as db:
+            states = [row[0] for row in db.execute("SELECT state FROM live_bursts")]
+        return states, transcribers
+
+    def test_two_clips_render_at_once_with_their_own_transcriber(self):
+        states, transcribers = self._render_two(2)
+        self.assertEqual(states, ["queued", "queued"])
+        self.assertEqual(len({id(transcriber) for transcriber in transcribers}), 2)
+
+    def test_one_worker_renders_in_turn_and_reuses_the_transcriber(self):
+        states, transcribers = self._render_two(1)
+        self.assertEqual(states, ["queued", "queued"])
+        self.assertIs(transcribers[0], transcribers[1])
+
+    def test_render_workers_is_validated(self):
+        example = (ROOT / "config.example.toml").read_text(encoding="utf-8")
+        self.assertIn("render_workers = 2\n", example)
+        too_many = Path(self.folder) / "config.toml"
+        too_many.write_text(example.replace("render_workers = 2\n", "render_workers = 9\n"), encoding="utf-8")
+        with self.assertRaisesRegex(ConfigError, "render_workers"):
+            load_config(too_many)
 
 
 if __name__ == "__main__":

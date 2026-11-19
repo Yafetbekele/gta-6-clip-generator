@@ -50,13 +50,15 @@ def make_server(config: Config, port: int = 8765):
                 return self.reply(200, page.replace("__TOKEN__", token).encode(), "text/html; charset=utf-8")
             if path == "/api/clips":
                 with connect(config.paths.database) as db:
-                    rows = db.execute("""SELECT c.id,c.streamer,c.title,c.duration,c.created,c.path,
+                    rows = db.execute("""SELECT c.id,c.streamer,c.title,c.duration,c.created,c.path,c.account,
                         r.score,r.notes FROM clips c LEFT JOIN clip_ratings r ON r.clip_id=c.id
                         ORDER BY c.created DESC,c.id""").fetchall()
                 clips = []
                 for row in rows:
                     clip = dict(row)
                     relative = clip.pop('path')
+                    if not (config.paths.data_dir / relative).is_file():
+                        continue  # Deleted video; its rating stays in the database and exports.
                     clip['video_version'] = hashlib.sha256(relative.encode()).hexdigest()[:16]
                     try:
                         manifest = json.loads((config.paths.data_dir / relative).with_suffix('.edit.json').read_text(encoding='utf-8'))

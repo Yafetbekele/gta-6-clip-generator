@@ -22,7 +22,9 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
         burst = db.execute("SELECT game_name FROM live_bursts WHERE 'live-' || stream_id || '-' || anchor = ?",
                            (clip_id,)).fetchone()
     topic = burst[0] if burst else config.twitch.game_name
-    hook = debate_hook(clip['transcript'], topic, clip_id) if text is None else manual_hook(text)
+    account = config.account(clip.get('account'))
+    language = (account.language if account else '') or 'en'
+    hook = debate_hook(clip['transcript'], topic, clip_id, language=language) if text is None else manual_hook(text)
     if suggest_only:
         print(' '.join(filter(None, (hook.label, hook.text))) or '(No hook)')
         return hook
@@ -32,7 +34,7 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
     staging = base / 'work'
     staging.mkdir(parents=True, exist_ok=True)
     # A generated filename avoids interpreting a clip ID as a path.
-    relative = Path('clips') / f'edited-{uuid4().hex}.mp4'
+    relative = Path('clips') / (account.name if account else '') / f'edited-{uuid4().hex}.mp4'
     target = base / relative
     with worker_lock(base, 'hook-edit'), TemporaryDirectory(dir=staging, ignore_cleanup_errors=True) as folder:
         work = Path(folder)
@@ -43,7 +45,8 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
         try:
             render(source, work, target, Moment(padding, duration, 0), clip['streamer'],
                    replace(config.editing, layout='fit'),
-                   Transcriber(config.editing.whisper_model), hook_text=text, topic=topic, hook_key=clip_id)
+                   Transcriber(config.editing.whisper_model), hook_text=text, topic=topic, hook_key=clip_id,
+                   language=language)
             with connect(config.paths.database) as db:
                 updated = db.execute("""UPDATE clips SET path=? WHERE id=? AND path=? AND state='pending'
                     AND NOT EXISTS (SELECT 1 FROM uploads WHERE clip_id=clips.id)""",

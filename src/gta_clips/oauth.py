@@ -44,6 +44,11 @@ def _token_request(url: str, fields: dict, method: str = "POST") -> dict:
     return result
 
 
+def token_key(platform: str, account: str | None = None) -> str:
+    """Each account set keeps its own login per platform; no account means the original single login."""
+    return f"{platform}@{account}" if account else platform
+
+
 def _save_token(path: Path, platform: str, payload: dict, previous: dict | None = None) -> dict:
     token = {**(previous or {}), **payload}
     token["expires_at"] = time.time() + int(payload.get("expires_in", 3600))
@@ -146,7 +151,9 @@ def _twitch_authorize(state: str) -> dict:
     })
 
 
-def authorize(path: Path, platform: str):
+def authorize(path: Path, platform: str, account: str | None = None):
+    if account and platform == "twitch":
+        raise ValueError("Twitch chat uses one login for every account set")
     state = secrets.token_urlsafe(32)
     if platform == "youtube":
         token = _google_authorize(state)
@@ -179,15 +186,24 @@ def authorize(path: Path, platform: str):
                 "grant_type": "ig_exchange_token", "client_secret": secret,
                 "access_token": token["access_token"],
             }, "GET")}
-    _save_token(path, platform, {**token, "authorization_id": secrets.token_hex(16)})
-    print(f"Authorized {platform}. Tokens are stored in the local database.")
+    _save_token(path, token_key(platform, account), {**token, "authorization_id": secrets.token_hex(16)})
+    where = f" for account set {account}" if account else ""
+    print(f"Authorized {platform}{where}. Tokens are stored in the local database.")
 
 
-def access_token(path: Path, platform: str) -> tuple[str, dict]:
+def connected(path: Path) -> set[str]:
+    """Saved login keys, such as youtube@gta6-1. Never returns token contents."""
     with connect(path) as db:
-        saved = db.execute("SELECT token FROM oauth WHERE platform=?", (platform,)).fetchone()
+        return {row[0] for row in db.execute("SELECT platform FROM oauth")}
+
+
+def access_token(path: Path, platform: str, account: str | None = None) -> tuple[str, dict]:
+    key = token_key(platform, account)
+    with connect(path) as db:
+        saved = db.execute("SELECT token FROM oauth WHERE platform=?", (key,)).fetchone()
     if saved is None:
-        raise RuntimeError(f"Run gta-clips auth {platform} first")
+        option = f" --account {account}" if account else ""
+        raise RuntimeError(f"Run gta-clips auth {platform}{option} first")
     token = json.loads(saved["token"])
     if token["expires_at"] <= time.time() + (86400 * 5 if platform == "instagram" else 120):
         if platform == "instagram":
@@ -208,5 +224,5 @@ def access_token(path: Path, platform: str) -> tuple[str, dict]:
                 "client_secret": env(f"{prefix}_CLIENT_SECRET"),
                 "grant_type": "refresh_token", "refresh_token": token["refresh_token"],
             })
-        token = _save_token(path, platform, new, token)
+        token = _save_token(path, key, new, token)
     return token["access_token"], token

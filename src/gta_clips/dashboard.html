@@ -71,6 +71,8 @@ section.tab { display: none; } section.tab.active { display: block; }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .muted { color: var(--muted); } .small { font-size: 12px; }
 .table-wrap { overflow-x: auto; }
+.login { margin-right: 8px; white-space: nowrap; }
+.login.off { color: var(--muted); }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
@@ -128,7 +130,7 @@ form.settings legend { font-weight: 600; padding: 0 6px; }
   </div>
 </header>
 <nav aria-label="Sections">
-  <a href="#overview">Overview</a><a href="#streamers">Streamers</a><a href="#activity">Activity</a><a href="#settings">Settings</a>
+  <a href="#overview">Overview</a><a href="#accounts">Accounts</a><a href="#streamers">Streamers</a><a href="#activity">Activity</a><a href="#settings">Settings</a>
 </nav>
 <main>
   <div class="banner" id="banner" role="status" aria-live="polite"></div>
@@ -147,6 +149,16 @@ form.settings legend { font-weight: 600; padding: 0 6px; }
     </div>
     <div class="card"><div class="card-head"><h2>Clip windows recorded per hour</h2><span class="muted small">Last 24 hours</span></div>
       <div class="chart" id="chart-windows"></div></div>
+  </section>
+
+  <section class="tab" id="tab-accounts">
+    <div class="card">
+      <div class="card-head"><h2>Account sets</h2>
+        <span class="muted small">Each clip belongs to one set, so nothing is posted twice.</span></div>
+      <p class="muted small">Clips are saved in a folder per set inside Twitch Clips\clips. Connect a set's logins with
+        <code>gta-clips auth youtube --account NAME</code> (or tiktok, instagram). Logins: YT YouTube, TT TikTok, IG Instagram.</p>
+      <div class="table-wrap"><table id="accounts"></table></div>
+    </div>
   </section>
 
   <section class="tab" id="tab-streamers">
@@ -262,6 +274,7 @@ function renderChannels() {
     {label: '#', num: true, value: r => r.rank || '—'},
     {label: 'Streamer', value: r => el('a', {href: 'https://www.twitch.tv/' + encodeURIComponent(r.login), target: '_blank', rel: 'noopener'}, r.login)},
     {label: 'Viewers', num: true, value: r => num(r.viewers)},
+    {label: 'For', wrap: true, value: r => (r.accounts && r.accounts.length) ? r.accounts.join(', ') : (r.category || '—')},
     {label: 'Status', value: r => r.watching ? (r.warm ? 'Watching' : 'Warming up (' + span(r.covered_seconds) + ')')
         : r.held_for_seconds ? 'Chat unavailable, retry in ' + span(r.held_for_seconds) : 'Connecting'},
     {label: 'Chat now (10s)', num: true, value: r => r.watching ? num(r.messages_last_10s) : '—'},
@@ -396,6 +409,24 @@ function renderCharts() {
 }
 
 // ---------- other tabs ----------
+const LANGUAGES = {en: 'English', es: 'Spanish', pt: 'Portuguese', de: 'German', fr: 'French'};
+function renderAccounts() {
+  const logins = r => el('span', {}, ...['youtube', 'tiktok', 'instagram'].map(p =>
+    el('span', {class: 'login ' + (r.logins[p] ? 'on' : 'off'), title: p + (r.logins[p] ? ' connected' : ' not connected')},
+      (r.logins[p] ? '✓ ' : '✗ ') + {youtube: 'YT', tiktok: 'TT', instagram: 'IG'}[p])));
+  table('accounts', [
+    {label: 'Account set', value: r => el('span', {}, el('b', {}, r.title), r.name && r.title !== r.name ? el('span', {class: 'muted small'}, ' ' + r.name) : null)},
+    {label: 'Watches', wrap: true, value: r => r.category ? r.category + ' · ' + (LANGUAGES[r.language] || r.language || 'any language') : '—'},
+    {label: 'Channels now', num: true, value: r => !r.category ? '—'
+        : (r.watching_now ?? 0) + ' / ' + r.feed_channels + (r.shared_with > 1 ? ' shared' : '')},
+    {label: 'Waiting for VOD', num: true, value: r => num(r.waiting)},
+    {label: 'To review', num: true, value: r => num(r.pending)},
+    {label: 'Approved', num: true, value: r => num(r.approved)},
+    {label: 'Last 24h', num: true, value: r => num(r.today)},
+    {label: 'Logins', value: logins},
+  ], data.accounts || [], 'No account sets yet. Add [[accounts]] to config.toml.');
+}
+
 function renderStreamers() {
   table('streamers', [
     {label: 'Streamer', value: r => el('a', {href: 'https://www.twitch.tv/' + encodeURIComponent(r.streamer), target: '_blank', rel: 'noopener'}, r.streamer)},
@@ -415,6 +446,7 @@ function renderActivity() {
   table('recent', [
     {label: 'When', value: r => stamp(r.anchor)},
     {label: 'Streamer', value: r => r.streamer},
+    {label: 'Account set', value: r => r.account || '—'},
     {label: 'Kind', value: r => el('span', {class: 'tag'}, KINDS[r.trigger_kind] || r.trigger_kind)},
     {label: 'Msgs/10s', num: true, value: r => num(r.messages)},
     {label: '× normal', num: true, value: r => r.spike_ratio ?? '—'},
@@ -535,7 +567,7 @@ async function load() {
     const r = await fetch('/api/overview');
     if (!r.ok) throw Error('Could not load the dashboard (' + r.status + ')');
     data = await r.json();
-    renderStatus(); renderTiles(); renderChannels(); renderCharts(); renderStreamers(); renderActivity();
+    renderStatus(); renderTiles(); renderChannels(); renderCharts(); renderAccounts(); renderStreamers(); renderActivity();
   } catch (error) { banner(error.message + '. Is the dashboard still running?'); }
 }
 async function loadSettings() {
@@ -545,7 +577,7 @@ async function loadSettings() {
 
 function route() {
   const name = (location.hash || '#overview').slice(1);
-  const known = ['overview', 'streamers', 'activity', 'settings'].includes(name) ? name : 'overview';
+  const known = ['overview', 'accounts', 'streamers', 'activity', 'settings'].includes(name) ? name : 'overview';
   document.querySelectorAll('section.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + known));
   document.querySelectorAll('nav a').forEach(a => { if (a.hash === '#' + known) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (known === 'settings' && !dirty) loadSettings();

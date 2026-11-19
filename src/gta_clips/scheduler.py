@@ -21,8 +21,13 @@ SENDERS: dict[str, Callable[[Upload], Result]] = {
 }
 
 
-def _run_one(config: Config, platform: str) -> bool:
+def _run_one(config: Config, platform: str, account: str | None = None) -> bool:
+    """Send one due clip for ``account`` (None: clips made before account sets) on ``platform``.
+
+    Each account set has its own login, daily cap and spacing per platform.
+    """
     database = config.paths.database
+    owner = account or ""
     now = int(time.time())
     settings = config.schedule[platform]
     with connect(database) as db:
@@ -30,8 +35,9 @@ def _run_one(config: Config, platform: str) -> bool:
             """SELECT MAX(sent_at) AS last,
                COUNT(CASE WHEN date(sent_at, 'unixepoch', 'localtime') = date('now', 'localtime')
                      THEN 1 END) AS today
-               FROM uploads WHERE platform=? AND sent_at IS NOT NULL""",
-            (platform,),
+               FROM uploads JOIN clips ON clips.id = uploads.clip_id
+               WHERE uploads.platform=? AND sent_at IS NOT NULL AND COALESCE(clips.account, '')=?""",
+            (platform, owner),
         ).fetchone()
         if pacing["today"] >= settings.daily_limit:
             return True
@@ -42,8 +48,8 @@ def _run_one(config: Config, platform: str) -> bool:
                       uploads.visibility, uploads.made_for_kids
                FROM uploads JOIN clips ON clips.id = uploads.clip_id
                WHERE uploads.platform=? AND uploads.state='queued' AND clips.state='approved'
-                     AND uploads.retry_at <= ?
-               ORDER BY clips.created, clips.id LIMIT 1""", (platform, now),
+                     AND uploads.retry_at <= ? AND COALESCE(clips.account, '')=?
+               ORDER BY clips.created, clips.id LIMIT 1""", (platform, now, owner),
         ).fetchone()
     if job is None or job["retry_at"] > now:
         return True
@@ -60,15 +66,15 @@ def _run_one(config: Config, platform: str) -> bool:
         path = path_for(config, job)
         if not path.is_file() or path.stat().st_size == 0:
             raise UploadError("Approved clip file is missing or empty")
-        token, account = access_token(database, platform)
-        authorization_id = account.get("authorization_id")
+        token, login = access_token(database, platform, account)
+        authorization_id = login.get("authorization_id")
         bound = checkpoint.get("authorization_id")
         if bound and bound != authorization_id:
             raise UploadError("The authorized account changed after approval", held=True)
         if not bound and authorization_id:
             checkpoint["authorization_id"] = authorization_id
             persist(checkpoint)
-        result = SENDERS[platform](Upload(job, path, token, account, checkpoint, persist))
+        result = SENDERS[platform](Upload(job, path, token, login, checkpoint, persist))
         attempts = 0
     except UploadError as exc:
         attempts += 1
@@ -98,16 +104,18 @@ def _run_one(config: Config, platform: str) -> bool:
              "{}" if sent else json.dumps(checkpoint), job["id"], platform),
         )
     log = logging.warning if result.state in ("failed", "held") or attempts else logging.info
-    log("%s %s %s | %s", platform, job["id"], result.state, detail)
+    log("%s%s %s %s | %s", platform, f"@{account}" if account else "", job["id"], result.state, detail)
     return not attempts
 
 
 def publish_due(config: Config) -> int:
     ok = True
     with worker_lock(config.paths.data_dir, "publish"):
+        owners = [None, *(account.name for account in config.accounts)]
         for platform, settings in config.schedule.items():
             if settings.daily_limit > 0:
-                ok = _run_one(config, platform) and ok
+                for owner in owners:
+                    ok = _run_one(config, platform, owner) and ok
     return int(not ok)
 
 

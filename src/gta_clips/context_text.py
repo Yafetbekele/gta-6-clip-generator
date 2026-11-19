@@ -77,37 +77,56 @@ def suggest_hook(transcript: str) -> ContextHook:
 SHORT_GAME = {'grand theft auto vi': 'GTA 6', 'grand theft auto v': 'GTA 5'}
 NOT_A_GAME = {'just chatting', 'irl', 'talk shows & podcasts'}
 # Prompts frame the streamer's own words as something to argue about; they claim nothing.
-QUOTE_LABELS = ('HOT TAKE OR FACTS?', 'AGREE OR DISAGREE?', 'IS THIS TAKE TOO FAR?',
-                'CHAT WAS SPLIT ON THIS', 'RIGHT OR WRONG?')
+QUOTE_LABELS = {
+    'en': ('HOT TAKE OR FACTS?', 'AGREE OR DISAGREE?', 'IS THIS TAKE TOO FAR?',
+           'CHAT WAS SPLIT ON THIS', 'RIGHT OR WRONG?'),
+    'es': ('¿OPINIÓN POLÉMICA O VERDAD?', '¿DE ACUERDO O NO?', '¿SE PASÓ CON ESTO?',
+           'EL CHAT SE DIVIDIÓ', '¿TIENE RAZÓN O NO?'),
+    'pt': ('OPINIÃO POLÊMICA OU VERDADE?', 'CONCORDA OU DISCORDA?', 'PASSOU DOS LIMITES?',
+           'O CHAT FICOU DIVIDIDO', 'CERTO OU ERRADO?'),
+}
 # Opinions about the game itself, never about the streamer, kept as questions or "change my mind".
 GAME_TAKES = (('UNPOPULAR OPINION', '{game} is overhyped. Change my mind.'),
               ('BE HONEST', 'Was {game} really worth the wait?'),
               ('DEBATE', 'Is {game} already the best game ever made?'),
               ('HOT TAKE', '{game} online will ruin {game}. Agree?'),
               ('BE HONEST', 'Is {game} actually better than {previous}?'))
-GENERIC_TAKES = (('BE HONEST', 'Who was actually right here?'),
-                 ('DEBATE', 'Was this out of line or fair?'),
-                 ('HOT TAKE', 'Chat overreacted to this. Agree?'))
+GENERIC_TAKES = {
+    'en': (('BE HONEST', 'Who was actually right here?'),
+           ('DEBATE', 'Was this out of line or fair?'),
+           ('HOT TAKE', 'Chat overreacted to this. Agree?')),
+    'es': (('SÉ SINCERO', '¿Quién tenía razón aquí?'),
+           ('DEBATE', '¿Se pasó de la raya o fue justo?'),
+           ('OPINIÓN POLÉMICA', 'El chat exageró con esto. ¿De acuerdo?')),
+    'pt': (('SEJA SINCERO', 'Quem estava certo aqui?'),
+           ('DEBATE', 'Isso passou do limite ou foi justo?'),
+           ('OPINIÃO POLÊMICA', 'O chat exagerou nisso. Concorda?')),
+}
 
 
-def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool = True) -> ContextHook:
+def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool = True,
+                language: str = 'en') -> ContextHook:
     """A debate prompt over the clip's own words, or an opinion question about the game.
 
     Template-based, not an LLM. ``key`` keeps the choice stable when a clip is re-rendered.
-    The text is a suggestion for human review before anything is published.
+    The text is a suggestion for human review before anything is published. ``language`` picks
+    the wording (en, es or pt; others use English); game takes are written in English only.
     """
+    language = language if language in QUOTE_LABELS else 'en'
     pick = zlib.crc32(key.encode('utf-8'))
     # ``quote=False`` when the speech is unreliable, such as a language Whisper was unsure of.
     spoken = suggest_hook(transcript) if quote else ContextHook()
     if spoken.text:
-        return ContextHook(spoken.text, spoken.evidence, 'debate_quote_v1', QUOTE_LABELS[pick % len(QUOTE_LABELS)])
+        labels = QUOTE_LABELS[language]
+        return ContextHook(spoken.text, spoken.evidence, 'debate_quote_v1', labels[pick % len(labels)])
     name = clean_text(topic)
-    if name and name.casefold() not in NOT_A_GAME:
+    if name and name.casefold() not in NOT_A_GAME and language == 'en':
         game = SHORT_GAME.get(name.casefold(), name)
         takes = GAME_TAKES if game == 'GTA 6' else GAME_TAKES[:4]
         label, text = takes[pick % len(takes)]
         text = text.format(game=game, previous='GTA 5')
         if len(text) <= MAX_HOOK_LENGTH:
             return ContextHook(text, '', 'debate_topic_v1', label)
-    label, text = GENERIC_TAKES[pick % len(GENERIC_TAKES)]
+    takes = GENERIC_TAKES[language]
+    label, text = takes[pick % len(takes)]
     return ContextHook(text, '', 'debate_generic_v1', label)

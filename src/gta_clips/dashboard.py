@@ -98,6 +98,7 @@ def overview(config: Config, now: float | None = None) -> dict:
         recent = _rows(db, """SELECT b.anchor, b.streamer, b.trigger_kind, b.messages, b.state, b.clip_id,
                                      b.detail, b.last_error, b.attempts, f.viewer_count, f.unique_chatters,
                                      ROUND(b.messages / NULLIF(f.baseline_per_10s, 0), 1) AS spike_ratio,
+                                     b.account,
                                      r.score
                               FROM live_bursts b
                               LEFT JOIN burst_features f ON f.stream_id=b.stream_id AND f.anchor=b.anchor
@@ -107,8 +108,16 @@ def overview(config: Config, now: float | None = None) -> dict:
                                 ORDER BY id DESC LIMIT 10""")
         unavailable = _rows(db, """SELECT streamer, reason, noted FROM unclippable_streams
                                    ORDER BY noted DESC LIMIT 10""")
+    from .accounts import summary
+    from .live import describe_feeds
+    accounts = summary(config)
+    for account in accounts:
+        watched = [item for item in channels if item["watching"] and account["name"] in (item.get("accounts") or [])]
+        account["watching_now"] = len(watched)
+        account["viewers_now"] = sum(item["viewers"] or 0 for item in watched)
     return {
-        "now": now, "game": config.twitch.game_name, "max_channels": config.live.max_channels,
+        "now": now, "game": describe_feeds(config), "max_channels": config.total_channels,
+        "accounts": accounts,
         "schedule": config.runtime.describe(),
         "in_window": config.runtime.watching_at(datetime.fromtimestamp(now)),
         "watcher": watcher, "runner": runner, "channels": channels,

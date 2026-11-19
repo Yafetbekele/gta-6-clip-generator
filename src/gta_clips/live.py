@@ -17,7 +17,7 @@ import requests
 from websockets.exceptions import ConnectionClosed, WebSocketException
 from websockets.sync.client import connect as websocket
 
-from .config import Config, LiveConfig
+from .config import Config, Feed, LiveConfig
 from .db import connect, worker_lock
 from .diagnostics import describe, redact
 from .discovery import Twitch, _timestamp
@@ -59,6 +59,9 @@ class Broadcast:
     viewer_count: int = 0
     rank: int = 0
     language: str = ""
+    game_name: str = ""
+    # Feed.key of the category and language this channel was found in.
+    feed: str = ""
 
 
 @dataclass
@@ -226,10 +229,11 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
             return False
         db.execute(
             """INSERT INTO live_bursts(stream_id, anchor, broadcaster_id, streamer, game_name,
-                                       messages, retry_at, detail, trigger_kind)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting for 30 seconds of post-roll', ?)""",
+                                       messages, retry_at, detail, trigger_kind, account)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting for 30 seconds of post-roll', ?, ?)""",
             (stream.stream_id, anchor, stream.broadcaster_id, stream.login,
-             config.twitch.game_name, messages, anchor + HALF_WINDOW, kind),
+             stream.game_name or config.twitch.game_name, messages, anchor + HALF_WINDOW, kind,
+             pick_account(db, config, stream.feed)),
         )
         db.execute(
             """INSERT INTO burst_features(stream_id, anchor, baseline_per_10s, observed_seconds,
@@ -244,6 +248,21 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
     return True
 
 
+def pick_account(db, config: Config, feed_key: str) -> str | None:
+    """The feed's account set with the fewest windows, so accounts sharing a category stay even.
+
+    Each window goes to exactly one account set, so no clip is posted on two accounts.
+    """
+    feed = next((feed for feed in config.feeds if feed.key == feed_key), None)
+    if feed is None or not feed.accounts:
+        return None
+    marks = ",".join("?" * len(feed.accounts))
+    counts = dict(db.execute(
+        f"""SELECT account, COUNT(*) FROM live_bursts WHERE account IN ({marks})
+            AND state != 'unavailable' GROUP BY account""", feed.accounts).fetchall())
+    return min(feed.accounts, key=lambda name: (counts.get(name, 0), feed.accounts.index(name)))
+
+
 def _save_peak(config: Config, stream_id: str, peak: Peak):
     with connect(config.paths.database) as db:
         db.execute(
@@ -253,11 +272,16 @@ def _save_peak(config: Config, stream_id: str, peak: Peak):
         )
 
 
-def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | None = None) -> list[Broadcast]:
-    """Live channels in the category, most viewers first, with their rank."""
+def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | None = None,
+                    feed: Feed | None = None) -> list[Broadcast]:
+    """Live channels in the category (and language, for a feed), most viewers first, with their rank."""
     pool = pool or config.live.max_channels
-    if config.twitch.all_streamers:
-        rows = list(islice(twitch.pages("streams", {"game_id": game_id, "first": min(100, pool)}), pool))
+    language = feed.language if feed else ""
+    if config.accounts or config.twitch.all_streamers:
+        query = {"game_id": game_id, "first": min(100, pool)}
+        if language:
+            query["language"] = language
+        rows = list(islice(twitch.pages("streams", query), pool))
     else:
         rows = []
         for index in range(0, len(config.twitch.streamers), 100):
@@ -267,11 +291,14 @@ def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | No
         rows.sort(key=lambda row: row["viewer_count"], reverse=True)
     active = []
     for row in rows:
-        if row["game_id"] == game_id and row["type"] == "live" and row["id"].isdecimal():
+        if (row["game_id"] == game_id and row["type"] == "live" and row["id"].isdecimal()
+                and (not language or row.get("language") == language)):
             active.append(Broadcast(row["id"], row["user_id"], row["user_login"],
                                     _timestamp(row["started_at"]).timestamp(),
                                     int(row.get("viewer_count") or 0), len(active) + 1,
-                                    row.get("language") or ""))
+                                    row.get("language") or "",
+                                    row.get("game_name") or (feed.category if feed else ""),
+                                    feed.key if feed else ""))
     return active
 
 
@@ -300,6 +327,16 @@ def choose_channels(candidates: list[Broadcast], watching: dict[str, float], den
     return chosen
 
 
+def choose_feeds(config: Config, candidates: dict[str, list[Broadcast]], watching: dict[str, float],
+                 denied: dict[str, float], unclippable: set[str], now: float) -> dict[str, Broadcast]:
+    """Each feed fills its own channel quota, so a huge category never crowds out a small one."""
+    chosen: dict[str, Broadcast] = {}
+    for feed in config.feeds:
+        streams = [stream for stream in candidates.get(feed.key, []) if stream.broadcaster_id not in chosen]
+        chosen.update(choose_channels(streams, watching, denied, unclippable, feed.channels, now))
+    return chosen
+
+
 def _unclippable(config: Config) -> set[str]:
     with connect(config.paths.database) as db:
         return {row[0] for row in db.execute("SELECT stream_id FROM unclippable_streams")}
@@ -308,22 +345,37 @@ def _unclippable(config: Config) -> set[str]:
 class StreamRefresher(Thread):
     """Fetches live channels in the background so the socket reader never waits on Helix."""
 
-    def __init__(self, config: Config, game_id: str, stop: Event):
+    def __init__(self, config: Config, games: dict[str, str], stop: Event):
+        """``games`` maps each Feed.key to its Twitch category ID."""
         super().__init__(name="stream-refresh", daemon=True)
-        self.config, self.game_id, self.stop = config, game_id, stop
+        self.config, self.games, self.stop = config, games, stop
         self.twitch = Twitch()
         self.lock = Lock()
-        self.candidates: list[Broadcast] | None = None
+        self.candidates: dict[str, list[Broadcast]] | None = None
 
     def refresh_once(self):
-        pool = min(100, self.config.live.max_channels + CANDIDATE_EXTRA)
-        candidates = _active_streams(self.twitch, self.config, self.game_id, pool)
+        found, errors = {}, []
+        for feed in self.config.feeds:
+            try:
+                pool = min(100, feed.channels + CANDIDATE_EXTRA)
+                found[feed.key] = _active_streams(self.twitch, self.config, self.games[feed.key], pool, feed)
+            except Exception as error:  # One failing category keeps its last list.
+                errors.append(error)
         with self.lock:
-            self.candidates = candidates
+            previous = self.candidates or {}
+            self.candidates = {feed.key: found.get(feed.key, previous.get(feed.key, []))
+                               for feed in self.config.feeds}
+        if errors and not found:
+            raise errors[0]
+        for error in errors:
+            logging.warning("Live channel refresh failed for one category: %s", describe(error))
 
-    def snapshot(self) -> list[Broadcast] | None:
+    def snapshot(self) -> dict[str, list[Broadcast]] | None:
         with self.lock:
-            return self.candidates
+            return dict(self.candidates) if self.candidates is not None else None
+
+    def has_candidates(self) -> bool:
+        return any((self.snapshot() or {}).values())
 
     def run(self):
         while not self.stop.wait(REFRESH_SECONDS):
@@ -519,9 +571,8 @@ def _listen(config: Config, twitch: Twitch, refresher: StreamRefresher, stop: Ev
         while not stop.is_set():
             now = time.monotonic()
             if now >= refresh_at:
-                candidates = refresher.snapshot() or []
-                desired = choose_channels(candidates, watching, denied, _unclippable(config),
-                                          config.live.max_channels, now)
+                desired = choose_feeds(config, refresher.snapshot() or {}, watching, denied,
+                                       _unclippable(config), now)
                 if not desired:
                     return
                 token, _ = access_token(config.paths.database, "twitch")
@@ -609,7 +660,7 @@ def _update_coverage(config: Config, desired: dict[str, Broadcast], subscription
             if rate.gap_since_pause(wall) > RATE_RETENTION:
                 del rates[stream_id]
     logging.info("Coverage: watched=%s/desired=%s/max=%s", len(watched_streams), len(desired),
-                 config.live.max_channels)
+                 config.total_channels)
 
 
 def write_json(path: Path, value: dict):
@@ -634,6 +685,7 @@ class WatchStatus:
         desired, subscriptions = desired or {}, subscriptions or {}
         watching, denied, rates = watching or {}, denied or {}, rates or {}
         wall, mono = time.time(), time.monotonic()
+        feeds = {feed.key: feed for feed in self.config.feeds}
         channels = []
         for channel, stream in desired.items():
             rate = rates.get(stream.stream_id)
@@ -641,6 +693,8 @@ class WatchStatus:
             channels.append({
                 "login": stream.login, "broadcaster_id": channel, "stream_id": stream.stream_id,
                 "viewers": stream.viewer_count, "rank": stream.rank, "language": stream.language,
+                "category": stream.game_name, "feed": stream.feed,
+                "accounts": list(feeds[stream.feed].accounts) if stream.feed in feeds else [],
                 "live_since": stream.started_at,
                 "watching": channel in subscriptions,
                 "watching_since": wall - (mono - since) if since is not None else None,
@@ -654,8 +708,8 @@ class WatchStatus:
         try:
             write_json(self.path, {
                 "state": state, "pid": os.getpid(), "session_id": self.session_id,
-                "started": self.started, "updated": wall, "game": self.config.twitch.game_name,
-                "max_channels": self.config.live.max_channels, "channels": channels,
+                "started": self.started, "updated": wall, "game": describe_feeds(self.config),
+                "max_channels": self.config.total_channels, "channels": channels,
             })
         except OSError as error:
             logging.debug("Could not write watcher status: %s", error)
@@ -671,6 +725,13 @@ class WatchStatus:
                     )
             except Exception as error:
                 logging.warning("Could not save a channel snapshot: %s", describe(error))
+
+
+def describe_feeds(config: Config) -> str:
+    if not config.accounts:
+        return config.twitch.game_name
+    names = dict.fromkeys(feed.category for feed in config.feeds)
+    return ", ".join(names)
 
 
 def _watch_stop_file(config: Config, stop: Event):
@@ -713,13 +774,13 @@ def _end_session(config: Config, session_id: int | None, reason: str):
 
 
 def watch(config: Config, stop: Event | None = None):
-    if not config.twitch.streamers:
+    if not config.twitch.streamers and not config.accounts:
         raise ValueError('Set twitch.streamers to channel logins or ["*"] before watching')
     with worker_lock(config.paths.data_dir, "watch-live"):
         twitch = Twitch()
         token, _ = access_token(config.paths.database, "twitch")
         _chat_user(token, twitch.client_id)
-        game = twitch.game_id(config.twitch.game_name)
+        games = {feed.key: twitch.game_id(feed.category) for feed in config.feeds}
         stop = stop if stop is not None else Event()
         session_id = _start_session(config)
         stop_file = config.paths.data_dir / STOP_FILE
@@ -727,13 +788,13 @@ def watch(config: Config, stop: Event | None = None):
         status = WatchStatus(config, session_id)
         status.write("starting")
         Thread(target=_watch_stop_file, args=(config, stop), name="stop-file", daemon=True).start()
-        refresher = StreamRefresher(config, game, stop)
+        refresher = StreamRefresher(config, games, stop)
         renderer = Thread(target=_render_loop, args=(config, stop), name="live-render", daemon=True)
         joins, seen, rates, buckets = deque(), {}, {}, ChatBuckets()
         failures = 0
         reason = "stopped"
         logging.info("Watching %s, up to %s channels. Ctrl+C stops the watcher.",
-                     config.twitch.game_name, config.live.max_channels)
+                     describe_feeds(config), config.total_channels)
         try:
             try:
                 refresher.refresh_once()
@@ -744,7 +805,7 @@ def watch(config: Config, stop: Event | None = None):
             while not stop.is_set():
                 began = time.monotonic()
                 try:
-                    if refresher.snapshot():
+                    if refresher.has_candidates():
                         _listen(config, twitch, refresher, stop, joins, seen, rates, buckets, status)
                         stop.wait(5)
                     else:

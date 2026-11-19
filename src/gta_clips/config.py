@@ -95,6 +95,8 @@ class LiveConfig:
     control_interval_seconds: int = 3600
     near_miss_multiplier: float = 2.0
     near_miss_interval_seconds: int = 3600
+    # Live clips rendered at the same time. Each one downloads, transcribes and encodes on its own.
+    render_workers: int = 2
 
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -137,6 +139,37 @@ def _minutes(value: str) -> int:
 
 
 @dataclass(frozen=True)
+class AccountConfig:
+    """One set of YouTube, TikTok and Instagram accounts fed by one Twitch category."""
+    name: str
+    category: str
+    # Twitch stream language, such as "en". Empty watches every language.
+    language: str = ""
+    channels: int = 5
+    label: str = ""
+
+    @property
+    def title(self) -> str:
+        return self.label or self.name
+
+
+@dataclass(frozen=True)
+class Feed:
+    """Channels watched for one category and language, shared by the accounts that use them."""
+    category: str
+    language: str
+    channels: int
+    accounts: tuple[str, ...]
+
+    @property
+    def key(self) -> str:
+        return f"{self.category}|{self.language}"
+
+
+MAX_TOTAL_CHANNELS = 100
+
+
+@dataclass(frozen=True)
 class Config:
     paths: PathsConfig
     twitch: TwitchConfig
@@ -145,6 +178,26 @@ class Config:
     schedule: dict[str, ScheduleConfig]
     live: LiveConfig = LiveConfig()
     runtime: RuntimeConfig = RuntimeConfig()
+    accounts: tuple[AccountConfig, ...] = ()
+
+    def account(self, name: str | None) -> AccountConfig | None:
+        return next((account for account in self.accounts if account.name == name), None)
+
+    @property
+    def feeds(self) -> tuple[Feed, ...]:
+        """Accounts with the same category and language share one set of watched channels."""
+        if not self.accounts:
+            return (Feed(self.twitch.game_name, "", self.live.max_channels, ()),)
+        grouped: dict[tuple[str, str], list[AccountConfig]] = {}
+        for account in self.accounts:
+            grouped.setdefault((account.category.casefold(), account.language), []).append(account)
+        return tuple(Feed(members[0].category, language, sum(a.channels for a in members),
+                          tuple(a.name for a in members))
+                     for (_, language), members in grouped.items())
+
+    @property
+    def total_channels(self) -> int:
+        return sum(feed.channels for feed in self.feeds)
 
 
 PLATFORMS = ("youtube", "instagram", "tiktok")
@@ -311,7 +364,40 @@ def _live(raw: object) -> LiveConfig:
         spike_multiplier=multiplier,
         cooldown_seconds=_integer(options.get("cooldown_seconds", defaults.cooldown_seconds),
                                   "live.cooldown_seconds", 60),
+        render_workers=_integer(options.get("render_workers", defaults.render_workers),
+                                "live.render_workers", 1, 4),
     )
+
+
+def _accounts(raw: object) -> tuple[AccountConfig, ...]:
+    if not isinstance(raw, list):
+        raise ConfigError("accounts must be written as [[accounts]] tables")
+    accounts = []
+    for index, value in enumerate(raw, start=1):
+        path = f"accounts #{index}"
+        options = _table(value, path, (field.name for field in fields(AccountConfig)))
+        name = _text(options.get("name"), f"{path}.name").lower()
+        # The name is also the clip folder, so keep it to safe characters.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", name):
+            raise ConfigError(f"{path}.name must be lowercase letters, digits and dashes, such as gta6-1")
+        if any(account.name == name for account in accounts):
+            raise ConfigError(f"Two accounts are named {name}")
+        language = options.get("language", "")
+        if not isinstance(language, str) or not re.fullmatch(r"([a-z]{2})?", language.strip().lower()):
+            raise ConfigError(f"{path}.language must be a two-letter code such as en, or empty for any")
+        label = options.get("label", "")
+        if not isinstance(label, str) or "\n" in label:
+            raise ConfigError(f"{path}.label must be a single line of text")
+        accounts.append(AccountConfig(
+            name=name, category=_text(options.get("category"), f"{path}.category"),
+            language=language.strip().lower(),
+            channels=_integer(options.get("channels", 5), f"{path}.channels", 1, 20),
+            label=label.strip(),
+        ))
+    total = sum(account.channels for account in accounts)
+    if total > MAX_TOTAL_CHANNELS:
+        raise ConfigError(f"Accounts watch {total} channels in total; the most is {MAX_TOTAL_CHANNELS}")
+    return tuple(accounts)
 
 
 def _clock(value: object, path: str) -> str:
@@ -354,7 +440,8 @@ def load_config(filename: str | Path = "config.toml") -> Config:
             raw = tomllib.load(file)
     except (OSError, RuntimeError, ValueError) as exc:
         raise ConfigError(f"Cannot read {filename}: {exc}") from exc
-    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule", "live", "runtime"))
+    options = _table(raw, "config", ("paths", "twitch", "highlights", "editing", "schedule", "live", "runtime",
+                                     "accounts"))
     paths = _table(options.get("paths", {}), "paths", ("data_dir",))
     directory = _text(paths.get("data_dir", "data"), "paths.data_dir")
     try:
@@ -369,4 +456,5 @@ def load_config(filename: str | Path = "config.toml") -> Config:
         schedule=_schedule(options.get("schedule", {})),
         live=_live(options.get("live", {})),
         runtime=_runtime(options.get("runtime", {})),
+        accounts=_accounts(options.get("accounts", [])),
     )

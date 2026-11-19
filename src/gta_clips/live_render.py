@@ -1,10 +1,13 @@
 """Turn saved live chat bursts into pending clips once the VOD covers the window."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from pathlib import Path
-from threading import Event
+from queue import Empty, SimpleQueue
+from threading import Event, Lock
 import logging
 import subprocess
 import time
@@ -59,21 +62,29 @@ def retry_delay(attempts: int) -> int:
 
 @dataclass
 class RenderContext:
-    """Expensive objects shared by every batch in one worker: the Whisper model and an app token."""
+    """Expensive objects kept between batches in one worker: Whisper models and an app token."""
     model: str
     twitch: Twitch | None = None
-    transcriber: Transcriber | None = None
-    archives: dict = field(default_factory=dict)
+    # One Transcriber per clip rendering at the same time; each keeps its own language result.
+    transcribers: SimpleQueue = field(default_factory=SimpleQueue)
+    _lock: Lock = field(default_factory=Lock)
 
     def client(self) -> Twitch:
-        if self.twitch is None:
-            self.twitch = Twitch()
-        return self.twitch
+        with self._lock:
+            if self.twitch is None:
+                self.twitch = Twitch()
+            return self.twitch
 
-    def whisper(self) -> Transcriber:
-        if self.transcriber is None:
-            self.transcriber = Transcriber(self.model)
-        return self.transcriber
+    @contextmanager
+    def whisper(self):
+        try:
+            transcriber = self.transcribers.get_nowait()
+        except Empty:
+            transcriber = Transcriber(self.model)
+        try:
+            yield transcriber
+        finally:
+            self.transcribers.put(transcriber)
 
 
 def _waiting(config: Config, burst, detail: str, delay: int = 60):
@@ -117,7 +128,9 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
             vod_duration: int, muted: float = 0.0):
     stream_id, anchor = burst["stream_id"], burst["anchor"]
     clip_id = f"live-{stream_id}-{anchor}"
-    relative = Path("clips") / f"{clip_id}.mp4"
+    # Each account set has its own folder; clips from before account sets stay at the top.
+    account = config.account(burst["account"])
+    relative = Path("clips") / (account.name if account else "") / f"{clip_id}.mp4"
     staging = config.paths.data_dir / "work"
     staging.mkdir(parents=True, exist_ok=True)
     length = 2 * HALF_WINDOW
@@ -133,13 +146,15 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
         # render() cuts the exact 60 seconds and rejects a section that is still too short.
         transcript = render(source, working, config.paths.data_dir / relative,
                             Moment(before, length, burst["messages"]), burst["streamer"],
-                            config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id)
+                            config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id,
+                            language=(account.language if account else "") or "en")
         metadata = generate(transcript, burst["game_name"], burst["streamer"], vod_id, start)
         with connect(config.paths.database) as db:
             db.execute("INSERT OR IGNORE INTO vods(id, streamer, status) VALUES (?, ?, 'live-window')",
                        (vod_id, burst["streamer"]))
             db.execute(INSERT_CLIP, (clip_id, vod_id, burst["streamer"], relative.as_posix(), start,
                                     length, transcript, metadata.title, metadata.description, metadata.hashtags))
+            db.execute("UPDATE clips SET account=? WHERE id=?", (account.name if account else None, clip_id))
             db.execute(
                 """INSERT OR REPLACE INTO clip_features(clip_id, source, speech_seconds, word_count,
                        language, language_probability) VALUES (?, ?, ?, ?, ?, ?)""",
@@ -172,45 +187,77 @@ def _process_due(config: Config, stop: Event | None, context: RenderContext):
             """UPDATE live_bursts SET state='unavailable', detail='No complete readable VOD window in 48 hours'
                WHERE state='waiting' AND anchor < unixepoch() - ?""", (MAX_ARCHIVE_WAIT,),
         )
+        workers = config.live.render_workers
         due = db.execute(
             """SELECT * FROM live_bursts WHERE state='waiting' AND retry_at<=unixepoch()
-               ORDER BY retry_at, anchor LIMIT 5""",
+               ORDER BY retry_at, anchor LIMIT ?""", (max(5, 3 * workers),),
         ).fetchall()
     if not due:
         return
     archives = {}  # Fresh per batch: archive durations grow while a stream is live.
+    jobs = []
     for burst in due:
         if stop is not None and stop.is_set():
             break
-        broadcaster = burst["broadcaster_id"]
-        try:
-            if broadcaster not in archives:
-                archives[broadcaster] = context.client().get("videos", {
-                    "user_id": broadcaster, "type": "archive", "sort": "time", "first": 30,
-                })["data"]
-            listed = archives[broadcaster]
-            window = archive_window(listed, burst["stream_id"], burst["anchor"])
-            if window is None:
-                has_archive = any(vod.get("stream_id") == burst["stream_id"] for vod in listed)
-                if not has_archive and time.time() - burst["anchor"] > NO_ARCHIVE_GRACE:
-                    mark_unclippable(config, burst, "No Twitch archive for this stream (VODs may be off)")
-                else:
-                    _waiting(config, burst, "Waiting for the Twitch archive to cover the full 60 seconds")
-                continue
-            vod_id, start = window
-            if any(vod["id"] == vod_id and vod.get("viewable") == "private" for vod in listed):
-                mark_unclippable(config, burst, "The Twitch archive is not public")
-                continue
-            duration = next(_duration(vod["duration"]) for vod in listed if vod["id"] == vod_id)
-            _render(config, context.whisper(), burst, vod_id, start, duration,
-                    muted_overlap(listed, vod_id, start, 2 * HALF_WINDOW))
-        except VodUnavailable as error:
-            # Subscriber-only or removed. This tool never works around access restrictions.
-            mark_unclippable(config, burst, f"VOD unavailable: {describe(error)[:300]}")
-        except requests.RequestException as error:
-            _failed_attempt(config, burst, error)
-        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
-            _failed_attempt(config, burst, error)
+        job = _attempt(config, burst, lambda burst=burst: _find_window(config, context, burst, archives))
+        if job is not None:
+            jobs.append(job)
+
+    def run(job):
+        burst, vod_id, start, duration, muted = job
+        if stop is not None and stop.is_set():
+            return
+        def work():
+            with context.whisper() as transcriber:
+                _render(config, transcriber, burst, vod_id, start, duration, muted)
+        _attempt(config, burst, work)
+
+    if workers == 1 or len(jobs) <= 1:
+        for job in jobs:
+            run(job)
+        return
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="render") as pool:
+        futures = [pool.submit(run, job) for job in jobs]
+    for future in futures:
+        future.result()  # Errors _attempt does not handle still reach the render loop's log.
+
+
+def _find_window(config: Config, context: RenderContext, burst, archives: dict):
+    """The VOD window for a burst, or None after recording why it has to wait or cannot be clipped."""
+    broadcaster = burst["broadcaster_id"]
+    if broadcaster not in archives:
+        archives[broadcaster] = context.client().get("videos", {
+            "user_id": broadcaster, "type": "archive", "sort": "time", "first": 30,
+        })["data"]
+    listed = archives[broadcaster]
+    window = archive_window(listed, burst["stream_id"], burst["anchor"])
+    if window is None:
+        has_archive = any(vod.get("stream_id") == burst["stream_id"] for vod in listed)
+        if not has_archive and time.time() - burst["anchor"] > NO_ARCHIVE_GRACE:
+            mark_unclippable(config, burst, "No Twitch archive for this stream (VODs may be off)")
+        else:
+            _waiting(config, burst, "Waiting for the Twitch archive to cover the full 60 seconds")
+        return None
+    vod_id, start = window
+    if any(vod["id"] == vod_id and vod.get("viewable") == "private" for vod in listed):
+        mark_unclippable(config, burst, "The Twitch archive is not public")
+        return None
+    duration = next(_duration(vod["duration"]) for vod in listed if vod["id"] == vod_id)
+    return burst, vod_id, start, duration, muted_overlap(listed, vod_id, start, 2 * HALF_WINDOW)
+
+
+def _attempt(config: Config, burst, action):
+    """Run one step for a burst, recording expected failures on that burst only."""
+    try:
+        return action()
+    except VodUnavailable as error:
+        # Subscriber-only or removed. This tool never works around access restrictions.
+        mark_unclippable(config, burst, f"VOD unavailable: {describe(error)[:300]}")
+    except requests.RequestException as error:
+        _failed_attempt(config, burst, error)
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as error:
+        _failed_attempt(config, burst, error)
+    return None
 
 
 def live_status(config: Config):

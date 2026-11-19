@@ -162,6 +162,26 @@ Run `gta-clips dashboard --open` to open a local page at `http://127.0.0.1:8766`
 
 Viewer history starts when the watcher first runs with this version; it saves one snapshot of the watched channels every 5 minutes. The dashboard only listens on this computer and reads the same SQLite database as the other commands.
 
+## Account sets
+
+To run several sets of YouTube, TikTok and Instagram accounts, add one `[[accounts]]` table per set to `config.toml` (`config.example.toml` has a commented example):
+
+```toml
+[[accounts]]
+name = "irl-es"          # lowercase letters, digits and dashes; used for the folder and logins
+label = "IRL Spanish"
+category = "Just Chatting"
+language = "es"          # Twitch stream language; leave empty for any language
+channels = 5
+```
+
+- Sets with the same category and language share one group of channels. Three English GTA 6 sets with 5 channels each watch 15 GTA 6 channels together. Each new clip window goes to the set in that group with the fewest windows so far, so a clip belongs to exactly one set and is never posted twice.
+- When account sets are configured, `[twitch].game_name` and `[live].max_channels` are ignored. The watcher covers each set's category and language, up to 100 channels in total.
+- Clips are saved in `clips/<set name>/` inside the storage directory. Debate headlines use the set's language (English, Spanish or Portuguese). A quote from the stream is only used when the transcript is in the same language.
+- Connect each set's logins with `gta-clips auth youtube --account NAME`, and the same for `tiktok` and `instagram`. A set only publishes with its own logins. `gta-clips auth youtube` without `--account` is the login for clips made before account sets. Twitch chat uses one login for everything.
+- `gta-clips accounts` lists each set with its clips to review, approved clips, clips waiting for a VOD and connected logins. The dashboard's **Accounts** tab and the review page's account filter show the same.
+- `gta-clips accounts sort` assigns earlier clip windows and clips to a set when their category and stream language match one, and moves their files into the set's folder. Clips that already have an upload record and all ratings stay as they are.
+
 ## Authorize platform access
 
 ### YouTube Shorts

@@ -37,6 +37,8 @@ control_interval_seconds = 3600
 # A near miss is a rise that cleared this multiple of the baseline but not spike_multiplier.
 near_miss_multiplier = 2.0
 near_miss_interval_seconds = 3600
+# Live clips rendered at the same time, 1 to 4.
+render_workers = 2
 
 # Used by `gta-clips run` and the dashboard. Times are local, as HH:MM.
 # An end earlier than the start runs past midnight, e.g. 22:00 to 02:00.
@@ -73,3 +75,15 @@ min_spacing_minutes = 120
 [schedule.tiktok]
 daily_limit = 0
 min_spacing_minutes = 120
+
+# Account sets: each is one YouTube + TikTok + Instagram group fed by one Twitch category.
+# Sets with the same category and language share their channels, and each clip goes to the
+# set with the fewest clips, so nothing is posted on two accounts. Clips are saved in
+# clips/<name>/. Without any [[accounts]], twitch.game_name and live.max_channels are used.
+# Connect a set's logins with: gta-clips auth youtube --account gta6-1
+# [[accounts]]
+# name = "gta6-1"          # lowercase letters, digits and dashes; also the folder name
+# label = "GTA 6 #1"       # optional display name
+# category = "Grand Theft Auto VI"
+# language = "en"          # Twitch stream language; leave out for any language
+# channels = 5             # live channels this set adds to the watch list (1 to 20)

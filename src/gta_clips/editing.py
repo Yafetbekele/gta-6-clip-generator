@@ -65,7 +65,7 @@ def _video_top(source: Path) -> int:
 def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
     settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
-    *, hook_text: str | None = None, topic: str = "", hook_key: str = "",
+    *, hook_text: str | None = None, topic: str = "", hook_key: str = "", language: str = "en",
 ) -> str:
     """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts.
 
@@ -87,10 +87,12 @@ def render(
             raise
         words = []
     transcribed = time.monotonic()
-    # Quote only confidently English speech; labels are English and garbled quotes look broken.
-    english = (getattr(transcriber, "language", None) == "en"
+    # Quote only speech confidently in the headline's language; garbled quotes look broken.
+    language = language or "en"
+    matches = (getattr(transcriber, "language", None) == language
                and (getattr(transcriber, "language_probability", None) or 0) >= 0.7)
-    hook = (debate_hook(" ".join(w.text for w in words), topic, hook_key or streamer, quote=english)
+    hook = (debate_hook(" ".join(w.text for w in words), topic, hook_key or streamer, quote=matches,
+                        language=language)
             if hook_text is None else manual_hook(hook_text))
     if settings.renderer == "remotion":
         from .remotion_render import render_polished
