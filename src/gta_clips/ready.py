@@ -59,19 +59,22 @@ def _note(account, clip) -> str:
             f"Clip ID: {clip['id']}\n")
 
 
-def _order(db, candidates: list, model: Model | None, rng: random.Random) -> list:
-    """Highest predicted views first, with some random picks; fully random without a model."""
+def _order(db, candidates: list, model: Model | None, rng: random.Random) -> tuple[list, dict]:
+    """Highest predicted views first, with some random picks; fully random without a model.
+
+    Also returns each clip's predicted log views, kept so they can be checked against real views.
+    """
     remaining = list(candidates)
     rng.shuffle(remaining)
     if model is None or not remaining:
-        return remaining
+        return remaining, {}
     found = clip_features(db, [clip["id"] for clip in remaining])
-    predicted = dict(zip(found, model.predict(list(found.values()))))
+    predicted = {clip_id: float(value) for clip_id, value in zip(found, model.predict(list(found.values())))}
     remaining.sort(key=lambda clip: -predicted.get(clip["id"], float("-inf")))
     ordered = []
     while remaining:
         ordered.append(remaining.pop(rng.randrange(len(remaining)) if rng.random() < EXPLORE else 0))
-    return ordered
+    return ordered, predicted
 
 
 def export_due(config: Config, now: float | None = None, rng: random.Random | None = None) -> list[Path]:
@@ -93,8 +96,8 @@ def export_due(config: Config, now: float | None = None, rng: random.Random | No
             wanted = allowed_by(per_day, moment) - done
             if wanted <= 0:
                 continue
-            candidates = _order(db, db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall(),
-                                model, rng)
+            candidates, predicted = _order(
+                db, db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall(), model, rng)
         for clip in candidates:
             if wanted <= 0:
                 break
@@ -103,13 +106,18 @@ def export_due(config: Config, now: float | None = None, rng: random.Random | No
                 continue
             folder = base / FOLDER / day / account.name
             folder.mkdir(parents=True, exist_ok=True)
-            stem = f"{moment:%H%M} {_safe(clip['streamer'], 25)} - {_safe(clip['title'].split(' | @')[0])}"
+            # The number after the time is the clip's place in today's order, so clips added in
+            # the same minute still sort best first by file name.
+            done += 1
+            stem = (f"{moment:%H%M}-{done:02d} {_safe(clip['streamer'], 25)} - "
+                    f"{_safe(clip['title'].split(' | @')[0])}")
             target = folder / f"{stem}.mp4"
             shutil.copy2(source, target)
             target.with_suffix(".txt").write_text(_note(account, clip), encoding="utf-8")
             with connect(config.paths.database) as db:
-                db.execute("INSERT INTO ready_exports(clip_id, account, day, path) VALUES (?, ?, ?, ?)",
-                           (clip["id"], account.name, day, target.relative_to(base).as_posix()))
+                db.execute("INSERT INTO ready_exports(clip_id, account, day, path, predicted) VALUES (?, ?, ?, ?, ?)",
+                           (clip["id"], account.name, day, target.relative_to(base).as_posix(),
+                            predicted.get(clip["id"])))
             logging.info("Ready to post on %s: %s", account.name, target.name)
             added.append(target)
             wanted -= 1

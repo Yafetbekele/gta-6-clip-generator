@@ -1,15 +1,19 @@
 """Predict a clip's views from its recorded stats, using only posts that already have views.
 
 A ridge regression is fitted from each post's clip stats (chat, stream, audio, video), its
-platform and its account to the log of its views 24 hours after posting, read from the stats
+platform, its account and when it went up to the log of its views 24 hours after posting, read from the stats
 snapshots. Comparing every post at the same age keeps older posts from winning just for being
 older. Each post is one row, so a clip posted on YouTube and Instagram counts twice. A platform
 whose posts all show zero views tells nothing about clips and is left out. Until MIN_POSTS posts
 qualify there is no model and callers should pick clips at random, so early posts give a fair
 sample. Ratings and hand-picked weights play no part.
+
+Each clip's prediction is stored when it is offered, so `check` can later compare it with the
+views the clip really got.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
 import math
 import time
@@ -26,6 +30,8 @@ TARGET_AGE = 24 * 3600
 LATEST_STAND_IN = 36 * 3600
 PLATFORMS = ("youtube", "instagram", "tiktok")
 PLATFORM = "platform="
+# Posting-time features. A clip not yet posted has no time, so it gets the average, like platform.
+TIME = "time:"
 RIDGE = 10.0
 MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
@@ -88,8 +94,8 @@ class Model:
 
     def _matrix(self, rows: list[dict]) -> np.ndarray:
         data = np.array([[row.get(name, _default(name)) for name in self.names] for row in rows], dtype=float)
-        # A clip not yet posted has no platform: it is scored as the average of the platforms.
-        fill = np.array([self.means[i] if name.startswith(PLATFORM) else self.medians[i]
+        # A clip not yet posted has no platform or time: it is scored as the average of the posts.
+        fill = np.array([self.means[i] if name.startswith((PLATFORM, TIME)) else self.medians[i]
                          for i, name in enumerate(self.names)])
         missing = np.isnan(data)
         data[missing] = np.take(fill, np.nonzero(missing)[1])
@@ -110,9 +116,17 @@ class Model:
 
 
 def _default(name: str):
-    if name.startswith(PLATFORM):
+    if name.startswith((PLATFORM, TIME)):
         return None
     return 0.0 if "=" in name else None
+
+
+def time_features(published: float) -> dict[str, float]:
+    """When a post went up, in local time: hour of day as a circle, and weekend or not."""
+    moment = datetime.fromtimestamp(published)
+    angle = 2 * math.pi * (moment.hour + moment.minute / 60) / 24
+    return {f"{TIME}hour_sin": math.sin(angle), f"{TIME}hour_cos": math.cos(angle),
+            f"{TIME}weekend": 1.0 if moment.weekday() >= 5 else 0.0}
 
 
 def views_at(snapshots: list[tuple[float, int]], age: float = TARGET_AGE) -> float | None:
@@ -127,34 +141,75 @@ def views_at(snapshots: list[tuple[float, int]], age: float = TARGET_AGE) -> flo
     return before[1] + share * (after[1] - before[1])
 
 
-def training_rows(db, now: float | None = None) -> tuple[list[dict], list[float]]:
-    """One row per post with its clip's features, platform and log views at TARGET_AGE."""
+def targets(db) -> tuple[dict, dict, dict]:
+    """Views at TARGET_AGE per post, with each post's clip and publish time; silent platforms left out."""
     snapshots: dict[tuple[str, str], list[tuple[float, int]]] = {}
     clips: dict[tuple[str, str], str] = {}
+    published: dict[tuple[str, str], float] = {}
     marks = ",".join("?" * len(PLATFORMS))
     for row in db.execute(
-            f"""SELECT p.platform, p.video_id, p.clip_id, s.fetched - s.published AS age, s.views
+            f"""SELECT p.platform, p.video_id, p.clip_id, s.fetched - s.published AS age, s.views, s.published
                 FROM posts p JOIN post_stats s USING (platform, video_id)
                 WHERE p.platform IN ({marks}) AND p.clip_id IS NOT NULL AND s.views IS NOT NULL
                   AND s.published IS NOT NULL""", PLATFORMS):
         key = (row["platform"], row["video_id"])
         snapshots.setdefault(key, []).append((row["age"], row["views"]))
         clips[key] = row["clip_id"]
-    targets = {key: value for key, items in snapshots.items() if (value := views_at(items)) is not None}
+        published[key] = min(published.get(key, row["published"]), row["published"])
+    found = {key: value for key, items in snapshots.items() if (value := views_at(items)) is not None}
     # A platform where every post has zero views says nothing about which clips are better.
     silent = {platform for platform in PLATFORMS
-              if not any(value > 0 for (name, _), value in targets.items() if name == platform)}
-    targets = {key: value for key, value in targets.items() if key[0] not in silent}
-    if not targets:
+              if not any(value > 0 for (name, _), value in found.items() if name == platform)}
+    return {key: value for key, value in found.items() if key[0] not in silent}, clips, published
+
+
+def training_rows(db, now: float | None = None) -> tuple[list[dict], list[float]]:
+    """One row per post: its clip's features, platform, posting time and log views at TARGET_AGE."""
+    views, clips, published = targets(db)
+    if not views:
         return [], []
-    wanted = sorted({clips[key] for key in targets})
-    found = clip_features(db, wanted)
+    found = clip_features(db, sorted({clips[key] for key in views}))
     rows, values = [], []
-    for key, value in sorted(targets.items()):
+    for key, value in sorted(views.items()):
         if clips[key] in found:
-            rows.append({**found[clips[key]], f"{PLATFORM}{key[0]}": 1.0})
+            rows.append({**found[clips[key]], f"{PLATFORM}{key[0]}": 1.0, **time_features(published[key])})
             values.append(math.log1p(value))
     return rows, values
+
+
+def _ranks(values: list[float]) -> np.ndarray:
+    """Rank of each value, ties sharing their average rank."""
+    ordered = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = np.empty(len(values))
+    start = 0
+    while start < len(ordered):
+        end = start
+        while end + 1 < len(ordered) and values[ordered[end + 1]] == values[ordered[start]]:
+            end += 1
+        for i in ordered[start:end + 1]:
+            ranks[i] = (start + end) / 2
+        start = end + 1
+    return ranks
+
+
+def check(db) -> dict:
+    """How well the guesses made when clips were offered match the views they really got.
+
+    Only posts whose clip had a stored guess count. A rank correlation near 0 means the order
+    was no better than random; near 1 means the clips predicted best really did best.
+    """
+    views, clips, _ = targets(db)
+    guesses = {row[0]: row[1] for row in db.execute(
+        "SELECT clip_id, predicted FROM ready_exports WHERE predicted IS NOT NULL")}
+    pairs = [(guesses[clips[key]], math.log1p(value)) for key, value in views.items() if clips[key] in guesses]
+    result: dict = {"posts": len(pairs)}
+    if len(pairs) >= 10:
+        guessed, actual = [pair[0] for pair in pairs], [pair[1] for pair in pairs]
+        if len(set(guessed)) > 1 and len(set(actual)) > 1:
+            result["rank_correlation"] = round(float(np.corrcoef(_ranks(guessed), _ranks(actual))[0, 1]), 3)
+        miss = float(np.median(np.abs(np.array(guessed) - np.array(actual))))
+        result["typical_miss"] = f"off by about x{math.exp(miss):.1f} in views"
+    return result
 
 
 def fit(rows: list[dict], targets: list[float]) -> Model:
@@ -186,15 +241,16 @@ def train(config: Config, now: float | None = None) -> Model | None:
     """Fit on every qualifying post, save a readable summary, or return None if there are too few."""
     now = time.time() if now is None else now
     with connect(config.paths.database) as db:
-        rows, targets = training_rows(db, now)
+        rows, values = training_rows(db, now)
+        checked = check(db)
     path = config.paths.data_dir / SUMMARY
     if len(rows) < MIN_POSTS:
         path.write_text(json.dumps({"posts": len(rows), "needed": MIN_POSTS,
-                                    "note": "Clips are picked at random until enough posts have views."},
-                                   indent=2), encoding="utf-8")
+                                    "note": "Clips are picked at random until enough posts have views.",
+                                    "predictions_checked": checked}, indent=2), encoding="utf-8")
         return None
-    model = fit(rows, targets)
-    path.write_text(json.dumps(model.summary(), indent=2), encoding="utf-8")
+    model = fit(rows, values)
+    path.write_text(json.dumps({**model.summary(), "predictions_checked": checked}, indent=2), encoding="utf-8")
     return model
 
 

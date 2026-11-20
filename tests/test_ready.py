@@ -123,9 +123,32 @@ class ExportTest(unittest.TestCase):
         self._clip("quiet", messages=10)
         self._clip("loud", messages=150)
         config = replace(self.config, runtime=replace(self.config.runtime, ready_per_day=1))
+        self.assertIn("time:hour_sin", model.names)
         with patch("gta_clips.ready.EXPLORE", 0):
-            export_due(config, datetime(2026, 11, 19, 1, 0).timestamp(), random.Random(0))
+            added = export_due(config, datetime(2026, 11, 19, 1, 0).timestamp(), random.Random(0))
         self.assertEqual(self._exported(), ["loud"])
+        self.assertTrue(added[0].name.startswith("0100-01 streamer - "))
+        with connect(self.config.paths.database) as db:
+            guess = db.execute("SELECT predicted FROM ready_exports WHERE clip_id='loud'").fetchone()[0]
+        self.assertIsNotNone(guess)
+
+    def test_predictions_are_checked_against_real_views(self):
+        from gta_clips.view_model import check
+        fetched = int(time.time())
+        for index in range(12):
+            clip_id = f"guessed{index}"
+            self._clip(clip_id, age=10 * 86400)
+            record(self.config, f"https://youtube.com/shorts/vid{index:05d}", clip_id)
+            with connect(self.config.paths.database) as db:
+                db.execute("INSERT INTO ready_exports(clip_id, account, day, path, predicted) VALUES (?, 'gta6-1', 'd', ?, ?)",
+                           (clip_id, f"p{index}", float(index)))
+                db.execute("""INSERT INTO post_stats(platform, video_id, fetched, published, views)
+                              VALUES ('youtube', ?, ?, ?, ?)""",
+                           (f"vid{index:05d}", fetched, fetched - 25 * 3600, 10 * (index + 1)))
+        with connect(self.config.paths.database) as db:
+            result = check(db)
+        self.assertEqual(result["posts"], 12)
+        self.assertEqual(result["rank_correlation"], 1.0)
 
     def test_daily_share_is_kept_and_clips_are_offered_once(self):
         for index in range(5):

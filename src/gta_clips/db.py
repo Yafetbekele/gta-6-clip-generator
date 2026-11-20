@@ -172,6 +172,8 @@ MIGRATIONS = [
         );
         """,
     ),
+    # The views model's guess for each clip when it was offered, to check against its real views.
+    ((("ready_exports", "predicted", "REAL"),), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
