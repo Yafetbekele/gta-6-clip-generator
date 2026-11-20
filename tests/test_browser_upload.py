@@ -30,6 +30,18 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_instagram_icon_sidebar_verifies_username_and_rejects_wrong_one(self):
+        for actual, passes in [('joethegoat2334', True), ('other_account', False)]:
+            page = MagicMock()
+            page.get_by_role.return_value.is_visible.return_value = False
+            profile = page.locator.return_value.locator.return_value.locator.return_value.filter.return_value.first
+            profile.get_attribute.return_value = '/'+actual+'/'
+            if passes:
+                verify_account(page, 'instagram', {'handle': 'joethegoat2334'})
+            else:
+                with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                    verify_account(page, 'instagram', {'handle': 'joethegoat2334'})
+
     def test_tiktok_audience_changes_private_to_everyone(self):
         page = MagicMock()
         field = page.get_by_text.return_value.locator.return_value

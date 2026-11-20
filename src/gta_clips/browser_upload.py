@@ -137,6 +137,18 @@ def verify_account(page, platform, target):
         actual = urlsplit(page.url).path.split("/")[2]
         if actual != target["channel_id"]:
             raise RuntimeError("YouTube channel does not match configured channel_id")
+    elif platform == 'instagram':
+        profile = page.get_by_role('link', name='Profile', exact=True)
+        if not profile.is_visible():
+            # Scope to the sidebar containing Home; feed/suggestion avatars are not identity.
+            home = page.locator('svg[aria-label="Home"]')
+            home.wait_for(state='visible')
+            sidebar = home.locator('xpath=ancestor::*[.//a//img[contains(@alt,"profile picture")]][1]')
+            profile = sidebar.locator('a').filter(has=page.locator('img[alt$="profile picture"]')).first
+        profile.wait_for(state='visible')
+        actual = urlsplit(profile.get_attribute('href') or '').path.strip('/').lower()
+        if actual != target['handle'].lstrip('@').lower():
+            raise RuntimeError(f'Instagram signed-in username @{actual} does not match configured handle')
     else:
         # A missing or renamed Profile link fails closed instead of guessing an account.
         profile = page.get_by_role("link", name=re.compile(r"^(Profile|View profile)$", re.I))
