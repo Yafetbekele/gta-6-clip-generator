@@ -133,7 +133,12 @@ def verify_account(page, platform, target):
             raise RuntimeError("YouTube channel does not match configured channel_id")
     else:
         # A missing or renamed Profile link fails closed instead of guessing an account.
-        profile = page.get_by_role("link", name=re.compile(r"^Profile$", re.I))
+        profile = page.get_by_role("link", name=re.compile(r"^(Profile|View profile)$", re.I))
+        if platform == 'tiktok' and not profile.is_visible():
+            # Collapsed TikTok layout hides View profile in the avatar hover menu.
+            avatar = page.locator('svg[class*="StyledAvatar"]')
+            avatar.wait_for(state='visible')
+            avatar.hover()
         try:
             profile.wait_for(state="visible")
         except Exception:

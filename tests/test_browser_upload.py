@@ -30,6 +30,15 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_tiktok_collapsed_avatar_menu(self):
+        page = MagicMock()
+        page.url = 'https://www.tiktok.com/foryou'
+        page.get_by_role.return_value.is_visible.return_value = False
+        page.get_by_role.return_value.get_attribute.return_value = '/@gta_clip83'
+        verify_account(page, 'tiktok', {'handle': 'Gta_clip83'})
+        page.locator.assert_any_call('svg[class*="StyledAvatar"]')
+        page.locator.return_value.hover.assert_called_once()
+
     def test_tiktok_pending_check_confirmation_clicked_once(self):
         page = MagicMock()
         success = MagicMock()
