@@ -150,7 +150,10 @@ def sync(config: Config) -> int:
 
 def _due(db, platform: str, now: float) -> list[sqlite3.Row]:
     return db.execute(
-        """SELECT p.video_id, p.account, MAX(s.fetched) AS fetched, MIN(s.published) AS published
+        # Only API snapshots count as fetched: the browser collector's carry no likes or watch
+        # time, so they must not hold back an API read.
+        """SELECT p.video_id, p.account, MAX(CASE WHEN s.likes IS NOT NULL THEN s.fetched END) AS fetched,
+                  MIN(s.published) AS published
            FROM posts p LEFT JOIN post_stats s USING (platform, video_id)
            WHERE p.platform=? GROUP BY p.video_id, p.account""", (platform,)).fetchall()
 
