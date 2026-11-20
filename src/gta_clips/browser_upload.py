@@ -135,15 +135,40 @@ def verify_account(page, platform, target):
         # A missing or renamed Profile link fails closed instead of guessing an account.
         profile = page.get_by_role("link", name=re.compile(r"^(Profile|View profile)$", re.I))
         if platform == 'tiktok' and not profile.is_visible():
-            # Collapsed TikTok layout hides View profile in the avatar hover menu.
-            avatar = page.locator('svg[class*="StyledAvatar"]')
-            avatar.wait_for(state='visible')
-            avatar.hover()
-        try:
-            profile.wait_for(state="visible")
-        except Exception:
-            raise RuntimeError(f'Could not find your signed-in {platform} Profile link; check login in the dedicated window') from None
-        actual = urlsplit(profile.get_attribute("href") or "").path.strip("/").lstrip("@").lower()
+            # Wait for either navigation layout to hydrate before selecting a path.
+            page.locator('a[data-e2e="nav-profile"], svg[class*="StyledAvatar"], button[aria-label="Profile"]').first.wait_for(state='visible')
+            # New navigation nests a role=listitem button inside the profile anchor,
+            # so its accessible link name is not reliably "Profile".
+            nav_profile = page.locator('a[data-e2e="nav-profile"]')
+            try:
+                nav_profile.wait_for(state='visible', timeout=3000)
+            except Exception:
+                pass
+            if nav_profile.is_visible():
+                profile = nav_profile
+        actual = None
+        if platform == 'tiktok' and not profile.is_visible():
+            profile_button = page.get_by_role('button', name='Profile', exact=True)
+            # Allow the account navigation to finish rendering before choosing a layout.
+            try:
+                profile_button.wait_for(state='visible', timeout=3000)
+            except Exception:
+                pass
+            if profile_button.is_visible():
+                profile_button.click()
+                page.wait_for_url(re.compile(r'https://www\.tiktok\.com/@[^/?]+/?(?:\?.*)?$'))
+                actual = urlsplit(page.url).path.strip('/').lstrip('@').lower()
+            else:
+                # Collapsed layout hides View profile in the avatar hover menu.
+                avatar = page.locator('svg[class*="StyledAvatar"]')
+                avatar.wait_for(state='visible')
+                avatar.hover()
+        if actual is None:
+            try:
+                profile.wait_for(state="visible")
+            except Exception:
+                raise RuntimeError(f'Could not find your signed-in {platform} Profile link; check login in the dedicated window') from None
+            actual = urlsplit(profile.get_attribute("href") or "").path.strip("/").lstrip("@").lower()
         if actual != target["handle"].lstrip("@").lower():
             raise RuntimeError(f"{platform} Profile link does not match configured handle")
         if platform == 'tiktok':

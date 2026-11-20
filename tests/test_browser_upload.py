@@ -30,10 +30,39 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_tiktok_navigation_anchor_with_nested_listitem(self):
+        page = MagicMock()
+        page.url = 'https://www.tiktok.com/foryou'
+        page.get_by_role.return_value.is_visible.return_value = False
+        page.locator.return_value.is_visible.return_value = True
+        page.locator.return_value.get_attribute.return_value = '/@gta_6_3_clips'
+        verify_account(page, 'tiktok', {'handle': 'gta_6_3_clips'})
+        page.locator.assert_any_call('a[data-e2e="nav-profile"]')
+        self.assertEqual(page.goto.call_count, 2)
+
+    def test_tiktok_profile_button_checks_resulting_account_url(self):
+        for handle, passes in [('gta_6_3_clips', True), ('wrong_account', False)]:
+            page = MagicMock()
+            page.url = 'https://www.tiktok.com/foryou'
+            link, control = MagicMock(), MagicMock()
+            link.is_visible.return_value = False
+            control.is_visible.return_value = True
+            page.get_by_role.side_effect = lambda role, **kw: control if role == 'button' else link
+            page.locator.return_value.is_visible.return_value = False
+            control.click.side_effect = lambda: setattr(page, 'url', 'https://www.tiktok.com/@'+handle)
+            if passes:
+                verify_account(page, 'tiktok', {'handle': 'gta_6_3_clips'})
+                self.assertEqual(page.goto.call_count, 2)
+            else:
+                with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                    verify_account(page, 'tiktok', {'handle': 'gta_6_3_clips'})
+                self.assertEqual(page.goto.call_count, 1)
+
     def test_tiktok_collapsed_avatar_menu(self):
         page = MagicMock()
         page.url = 'https://www.tiktok.com/foryou'
         page.get_by_role.return_value.is_visible.return_value = False
+        page.locator.return_value.is_visible.return_value = False
         page.get_by_role.return_value.get_attribute.return_value = '/@gta_clip83'
         verify_account(page, 'tiktok', {'handle': 'Gta_clip83'})
         page.locator.assert_any_call('svg[class*="StyledAvatar"]')
