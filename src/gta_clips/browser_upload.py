@@ -94,7 +94,40 @@ def ledger(path: Path):
     db.execute('''CREATE TABLE IF NOT EXISTS login_checks (
         platform TEXT, account TEXT, identity TEXT, verified INTEGER, checked REAL,
         PRIMARY KEY(platform, account))''')
+    db.execute('''CREATE TABLE IF NOT EXISTS account_blocks (
+        platform TEXT, account TEXT, identity TEXT, reason TEXT, checked REAL,
+        PRIMARY KEY(platform, account))''')
     return db
+
+
+class InstagramRestricted(RuntimeError):
+    pass
+
+
+def assert_instagram_available(page):
+    url = page.url if isinstance(page.url, str) else ''
+    path = urlsplit(url).path.lower()
+    restricted = ('/accounts/suspended', '/accounts/disabled', '/accounts/appeal',
+                  '/challenge', '/checkpoint', '/accounts/confirm_email', '/accounts/verify')
+    if any(path.startswith(prefix) for prefix in restricted):
+        raise InstagramRestricted('Instagram appeal or identity verification required; complete it manually, then run verify-login')
+    prompts = re.compile(r"^(?:You submitted an appeal|We suspended your account|Your account (?:has been suspended|has been disabled|is suspended)|Confirm your identity|Help us confirm you own this account|Upload a photo of yourself|Take a video selfie|Enter your mobile number|Enter your phone number)[.!]?$", re.I)
+    if page.get_by_text(prompts, exact=True).first.is_visible() is True:
+        raise InstagramRestricted('Instagram appeal or identity verification required; complete it manually, then run verify-login')
+
+
+def set_account_block(db, platform, account, target, reason):
+    identity = target.get('channel_id' if platform == 'youtube' else 'handle', '').lstrip('@').lower()
+    with db:
+        db.execute('INSERT OR REPLACE INTO account_blocks VALUES(?,?,?,?,?)',
+                   (platform, account, identity, reason, time.time()))
+
+
+def account_block(db, platform, account, target):
+    identity = target.get('channel_id' if platform == 'youtube' else 'handle', '').lstrip('@').lower()
+    row = db.execute('SELECT reason FROM account_blocks WHERE platform=? AND account=? AND identity=?',
+                     (platform, account, identity)).fetchone()
+    return row[0] if row else None
 
 
 def verify_saved_account(page, platform, account, target, db):
@@ -103,6 +136,21 @@ def verify_saved_account(page, platform, account, target, db):
     try:
         verify_account(page, platform, target)
         verified = True
+        with db:
+            db.execute('DELETE FROM account_blocks WHERE platform=? AND account=?', (platform, account))
+    except InstagramRestricted as exc:
+        set_account_block(db, platform, account, target, str(exc))
+        raise
+    except Exception:
+        if platform == 'instagram' and page is not None:
+            try:
+                assert_instagram_available(page)
+            except InstagramRestricted as exc:
+                set_account_block(db, platform, account, target, str(exc))
+                raise
+            except Exception:
+                pass
+        raise
     finally:
         with db:
             db.execute('INSERT OR REPLACE INTO login_checks VALUES (?,?,?,?,?)',
@@ -144,6 +192,8 @@ def verify_account(page, platform, target):
     # Studio's sidebar has no Profile link; use TikTok's main navigation for identity.
     identity_url = 'https://www.tiktok.com/foryou' if platform == 'tiktok' else START[platform]
     page.goto(identity_url, wait_until="domcontentloaded")
+    if platform == 'instagram':
+        assert_instagram_available(page)
     if platform == 'tiktok' and urlsplit(page.url).path.rstrip('/') == '/about':
         raise RuntimeError('TikTok redirected verification to About. Open login, choose Watch TikTok, and confirm your Profile is @'
                            + target['handle'].lstrip('@') + '; close that window before verifying again')
@@ -164,6 +214,7 @@ def verify_account(page, platform, target):
         actual = urlsplit(profile.get_attribute('href') or '').path.strip('/').lower()
         if actual != target['handle'].lstrip('@').lower():
             raise RuntimeError(f'Instagram signed-in username @{actual} does not match configured handle')
+        assert_instagram_available(page)
     else:
         # A missing or renamed Profile link fails closed instead of guessing an account.
         profile = page.get_by_role("link", name=re.compile(r"^(Profile|View profile)$", re.I))
@@ -316,11 +367,13 @@ def instagram(page, clip, publish):
     caption = f"{clip.title}\n\n{clip.description}"
     if len(caption) > 2200:
         raise ValueError("Instagram caption exceeds 2200 characters")
+    assert_instagram_available(page)
     create = page.get_by_role("link", name=re.compile(r"^New post$|^Create$", re.I))
     if create.is_visible():
         create.click()
     else:
         page.locator('svg[aria-label="Post"]').click()
+    assert_instagram_available(page)
     page.locator('input[type="file"]').set_input_files(str(clip.file))
     notice = page.get_by_role('dialog').filter(has_text='Video posts are now shared as reels')
     try:
@@ -340,6 +393,7 @@ def instagram(page, clip, publish):
     button(page, "Next").click()
     button(page, "Next").click()
     page.get_by_role("textbox", name=re.compile(r'^(Write|Add) a caption\.\.\.$')).fill(caption)
+    assert_instagram_available(page)
     print('Instagram: submitting post', flush=True)
     button(page, "Share").click()
     print('Instagram: waiting for sharing confirmation', flush=True)
@@ -479,6 +533,10 @@ def execute(args, config, target, state, root, db, daily, spacing):
         return 0
     if args.action == "run" and platform != "youtube" and not args.publish:
         raise ValueError("Use preview first, then run --publish for TikTok/Instagram")
+    if args.action == 'run':
+        blocked = account_block(db, platform, account, target)
+        if blocked:
+            raise RuntimeError(blocked)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -508,6 +566,17 @@ def execute(args, config, target, state, root, db, daily, spacing):
                 try:
                     result = ADAPTERS[platform](page, clip, args.publish)
                 except Exception as exc:
+                    if isinstance(exc, InstagramRestricted):
+                        set_account_block(db, platform, account, target, str(exc))
+                        print(str(exc), flush=True)
+                    elif platform == 'instagram':
+                        try:
+                            assert_instagram_available(page)
+                        except InstagramRestricted as restriction:
+                            set_account_block(db, platform, account, target, str(restriction))
+                            print(str(restriction), flush=True)
+                        except Exception:
+                            pass
                     finish(db, platform, account, clip, "held", detail=f"{type(exc).__name__}: inspect site before retrying")
                     print("Stopped. Upload held for manual inspection; it will not be retried automatically.")
                     return 1

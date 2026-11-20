@@ -8,13 +8,16 @@ import sys
 import time
 from pathlib import Path
 
-from .browser_upload import PLATFORMS, exists, ledger, scan, settings
+from .browser_upload import PLATFORMS, exists, ledger, scan, settings, account_block
 from .db import worker_lock
 
 
 def readiness(db, account, platform, target, now):
     if target.get('auto_post') is not True:
         return 'disabled'
+    blocked = account_block(db, platform, account, target)
+    if blocked:
+        return 'paused: account verification / appeal required'
     rows = db.execute('SELECT state,started FROM posts WHERE account=? AND platform=?',
                       (account, platform)).fetchall()
     # Held clips remain excluded by the upload ledger, but do not stop this account.

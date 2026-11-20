@@ -46,6 +46,8 @@ Run a read-only collection manually with `.venv\Scripts\python.exe -m gta_clips.
 
 Used ready copies and original MP4s are cleaned after successful uploads and scheduled cycles. The ready MP4 and matching TXT, plus the original video referenced by the clip database, are deleted only once every destination with a configured channel ID/handle for that set has a confirmed `posted` or `under_review` ledger record. Disabled destinations with saved identities still count, so their pending clips are retained. Failed, canceled, private, or uncertain attempts do not qualify. Original cleanup is restricted to the resolved `data/clips` directory; shared source files require every referencing clip to qualify. Tracking, metadata, ratings, and duplicate-prevention database records remain intact. Deleted videos will no longer be playable in review.
 
+Instagram suspension, appeal, checkpoint, and identity-verification screens block uploads. The guard checks navigation, file selection, and the final Share step. Detection creates an account-specific pause in `account_blocks`; the scheduler and view collector skip that destination instead of reopening it repeatedly. This differs from ordinary failed clips, which remain held individually while other clips can continue. Complete the appeal/verification manually in **login**, close the dedicated window, and run **verify-login**; only successful verification of the configured account clears the pause. Enabling hourly posting alone does not clear it. Other destinations remain independent.
+
 ```powershell
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform youtube --account gta6-2
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform tiktok --account gta6-2

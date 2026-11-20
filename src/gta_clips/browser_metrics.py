@@ -7,7 +7,7 @@ import sqlite3
 import time
 import tomllib
 
-from .browser_upload import chrome_profile, ledger, upload_slot, verify_saved_account
+from .browser_upload import chrome_profile, ledger, upload_slot, verify_saved_account, account_block
 from .db import worker_lock, WorkerBusy
 
 
@@ -117,6 +117,9 @@ def collect(settings, force=False, only_account=None, only_platform=None):
                         continue
                     identity = target.get('channel_id' if platform == 'youtube' else 'handle', '').lstrip('@').lower()
                     if not identity or not chrome_profile(state, platform, account).is_dir():
+                        continue
+                    if account_block(upload_db, platform, account, target):
+                        results.append({'account': account, 'platform': platform, 'status': 'paused: account verification / appeal required'})
                         continue
                     attempts = [dict(r) for r in upload_db.execute(
                         'SELECT * FROM posts WHERE platform=? AND account=?', (platform, account))]

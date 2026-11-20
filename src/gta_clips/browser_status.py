@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime
 
-from .browser_upload import ledger
+from .browser_upload import ledger, account_block
 from .browser_schedule import readiness
 
 
@@ -24,6 +24,8 @@ def account_status(path):
                     login = ('Verified ' if check['verified'] else 'Check failed ') + when
                 elif check:
                     login = 'Recheck: identity changed'
+                if account_block(db, platform, account, target):
+                    login = 'Appeal / verification required'
                 counts = dict(db.execute('SELECT state,COUNT(*) FROM posts WHERE account=? AND platform=? GROUP BY state', (account, platform)).fetchall())
                 posted = counts.get('posted', 0)
                 review = counts.get('under_review', 0)
