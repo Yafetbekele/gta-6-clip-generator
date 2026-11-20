@@ -59,7 +59,10 @@ def run_upload(path, state, account, platform):
         with log_path.open('a', encoding='utf-8') as log:
             log.write(f'\n{time.time()} {account}/{platform}\n')
             log.flush()
-            result = subprocess.run(command, cwd=path.parent, stdout=log, stderr=log)
+            # No console window: the scheduled task runs under pythonw.
+            flags = 0x08000000 if sys.platform == 'win32' else 0
+            result = subprocess.run(command, cwd=path.parent, stdout=log, stderr=log,
+                                    stdin=subprocess.DEVNULL, creationflags=flags)
         return 'run completed' if result.returncode == 0 else f'needs attention: check {log_path.name}'
     except Exception as exc:
         return f'needs attention: {type(exc).__name__}'
