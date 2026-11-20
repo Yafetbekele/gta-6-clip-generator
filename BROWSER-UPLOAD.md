@@ -36,6 +36,8 @@ For a menu instead of commands, double-click **Browser Uploader.cmd** in the pro
 
 The launcher stays open after actions and handled errors; press Enter to return to the menu or enter `q` at a numbered menu to quit. Choose **ALL ACCOUNTS STATUS** from the account menu, or action **9 — all accounts status**, to view all destinations. It shows hourly posting ON/OFF, the last login verification with its timestamp, confirmed post and under-review counts, and scheduler eligibility. Login checks are saved by verify-login and posting, keyed to the configured identity. Existing sessions initially show Not checked until their next verification; changing the identity requires a fresh check. The overview does not open browsers or test current sign-ins automatically.
 
+View-tracking reports are exported to `data/view-tracking/index.html` after each scheduler cycle. The Desktop `Twitch Clips/View Tracking` folder links to those reports. They include latest linked-post metrics, all metric snapshots, measured clip features, upload records, and the saved model summary as JSON downloads. Refresh manually with `.venv\Scripts\python.exe -m gta_clips.view_tracking --settings browser-upload.json`. Exporting reads existing local data only; collecting new view metrics remains the stats worker's responsibility. Blank metrics mean unknown, not zero. Original databases stay in place.
+
 ```powershell
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform youtube --account gta6-2
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform tiktok --account gta6-2

@@ -2,6 +2,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import subprocess
 import sys
 import time
@@ -80,6 +81,12 @@ def tick(path, dry_run=False):
             temp = state / 'hourly-status.tmp'
             temp.write_text(json.dumps({'updated': time.time(), 'accounts': results}, indent=2), encoding='utf-8')
             temp.replace(state / 'hourly-status.json')
+    if not dry_run:
+        try:
+            from .view_tracking import export_tracking
+            export_tracking(path)
+        except Exception as exc:
+            logging.warning('View tracking report not refreshed (%s)', type(exc).__name__)
     return results
 
 
