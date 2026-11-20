@@ -120,7 +120,9 @@ def button(page, name):
 
 def verify_account(page, platform, target):
     """Check authenticated identity from the site's own account navigation, not supplied text."""
-    page.goto(START[platform], wait_until="domcontentloaded")
+    # Studio's sidebar has no Profile link; use TikTok's main navigation for identity.
+    identity_url = 'https://www.tiktok.com/' if platform == 'tiktok' else START[platform]
+    page.goto(identity_url, wait_until="domcontentloaded")
     if platform == "youtube":
         page.wait_for_url(re.compile(r"https://studio\.youtube\.com/channel/[^/?]+(?:[/?].*)?$"))
         actual = urlsplit(page.url).path.split("/")[2]
@@ -129,10 +131,16 @@ def verify_account(page, platform, target):
     else:
         # A missing or renamed Profile link fails closed instead of guessing an account.
         profile = page.get_by_role("link", name=re.compile(r"^Profile$", re.I))
-        profile.wait_for(state="visible")
+        try:
+            profile.wait_for(state="visible")
+        except Exception:
+            raise RuntimeError(f'Could not find your signed-in {platform} Profile link; check login in the dedicated window') from None
         actual = urlsplit(profile.get_attribute("href") or "").path.strip("/").lstrip("@").lower()
         if actual != target["handle"].lstrip("@").lower():
             raise RuntimeError(f"{platform} Profile link does not match configured handle")
+        if platform == 'tiktok':
+            page.goto(START[platform], wait_until='domcontentloaded')
+            page.locator('input[type="file"]').first.wait_for(state='attached')
 
 
 def wait_youtube_checks(page, timeout=600):
