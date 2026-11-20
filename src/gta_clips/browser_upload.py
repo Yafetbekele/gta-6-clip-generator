@@ -121,8 +121,11 @@ def button(page, name):
 def verify_account(page, platform, target):
     """Check authenticated identity from the site's own account navigation, not supplied text."""
     # Studio's sidebar has no Profile link; use TikTok's main navigation for identity.
-    identity_url = 'https://www.tiktok.com/' if platform == 'tiktok' else START[platform]
+    identity_url = 'https://www.tiktok.com/foryou' if platform == 'tiktok' else START[platform]
     page.goto(identity_url, wait_until="domcontentloaded")
+    if platform == 'tiktok' and urlsplit(page.url).path.rstrip('/') == '/about':
+        raise RuntimeError('TikTok redirected verification to About. Open login, choose Watch TikTok, and confirm your Profile is @'
+                           + target['handle'].lstrip('@') + '; close that window before verifying again')
     if platform == "youtube":
         page.wait_for_url(re.compile(r"https://studio\.youtube\.com/channel/[^/?]+(?:[/?].*)?$"))
         actual = urlsplit(page.url).path.split("/")[2]

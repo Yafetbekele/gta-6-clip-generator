@@ -49,18 +49,27 @@ class BrowserUploadTests(unittest.TestCase):
 
     def test_tiktok_verifies_on_main_site_then_returns_to_studio(self):
         page = MagicMock()
+        page.url = 'https://www.tiktok.com/foryou'
         page.get_by_role.return_value.get_attribute.return_value = '/@Gta_clip80'
         verify_account(page, 'tiktok', {'handle': 'Gta_clip80'})
         self.assertEqual([c.args[0] for c in page.goto.call_args_list],
-                         ['https://www.tiktok.com/', 'https://www.tiktok.com/tiktokstudio/upload'])
+                         ['https://www.tiktok.com/foryou', 'https://www.tiktok.com/tiktokstudio/upload'])
         page.locator.return_value.first.wait_for.assert_called_once_with(state='attached')
 
     def test_tiktok_wrong_account_never_opens_upload_page(self):
         page = MagicMock()
+        page.url = 'https://www.tiktok.com/foryou'
         page.get_by_role.return_value.get_attribute.return_value = '/@someone_else'
         with self.assertRaisesRegex(RuntimeError, 'does not match'):
             verify_account(page, 'tiktok', {'handle': 'Gta_clip80'})
         self.assertEqual(page.goto.call_count, 1)
+
+    def test_tiktok_about_redirect_is_not_verified(self):
+        page = MagicMock()
+        page.url = 'https://www.tiktok.com/about?lang=en'
+        with self.assertRaisesRegex(RuntimeError, 'redirected verification to About'):
+            verify_account(page, 'tiktok', {'handle': 'Gta_clip80'})
+        page.get_by_role.assert_not_called()
 
     def test_new_checks_require_both_visible_success_results(self):
         for count, visible, passes in ((2, True, True), (1, True, False), (2, False, False)):
