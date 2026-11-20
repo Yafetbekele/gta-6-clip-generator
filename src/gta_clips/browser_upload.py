@@ -181,6 +181,20 @@ def youtube(page, clip, publish):
     return url
 
 
+def confirm_tiktok_post(page, timeout=180):
+    deadline = time.monotonic() + timeout
+    confirmed = False
+    while time.monotonic() < deadline:
+        if page.get_by_text('Your video has been uploaded', exact=False).is_visible():
+            return
+        # Studio asks for a second confirmation when content checks are pending.
+        if not confirmed and page.get_by_text('Continue to post?', exact=True).is_visible():
+            button(page, 'Post now').click()
+            confirmed = True
+        page.wait_for_timeout(1000)
+    raise RuntimeError('TikTok publication was not confirmed; inspect Posts before retrying')
+
+
 def tiktok(page, clip, publish):
     if not publish:
         raise ValueError("TikTok supports preview or explicit publish; no automated draft mode")
@@ -192,7 +206,7 @@ def tiktok(page, clip, publish):
     # Require the public audience control to be present; never change private defaults silently.
     page.get_by_text("Everyone", exact=True).wait_for(state="visible")
     button(page, "Post").click(timeout=600_000)
-    page.get_by_text("Your video has been uploaded", exact=False).wait_for(timeout=180_000)
+    confirm_tiktok_post(page)
     # TikTok may not expose the resulting URL in its success modal.
     return ""
 

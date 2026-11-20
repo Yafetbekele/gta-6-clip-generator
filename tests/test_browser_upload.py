@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile, main
-from gta_clips.browser_upload import upload_slot, wait_youtube_checks
+from gta_clips.browser_upload import upload_slot, wait_youtube_checks, confirm_tiktok_post
 from gta_clips.db import worker_lock, WorkerBusy
 
 
@@ -30,6 +30,23 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_tiktok_pending_check_confirmation_clicked_once(self):
+        page = MagicMock()
+        success = MagicMock()
+        success.is_visible.side_effect = [False, False, True]
+        modal = MagicMock()
+        modal.is_visible.return_value = True
+        page.get_by_text.side_effect = lambda text, **kw: modal if text == 'Continue to post?' else success
+        confirm_tiktok_post(page)
+        page.get_by_role.assert_called_once_with('button', name='Post now', exact=True)
+        page.get_by_role.return_value.click.assert_called_once()
+
+    def test_tiktok_without_confirmation_modal_waits_for_success(self):
+        page = MagicMock()
+        page.get_by_text.return_value.is_visible.return_value = True
+        confirm_tiktok_post(page)
+        page.get_by_role.assert_not_called()
+
     def test_tiktok_verifies_on_main_site_then_returns_to_studio(self):
         page = MagicMock()
         page.get_by_role.return_value.get_attribute.return_value = '/@Gta_clip80'
