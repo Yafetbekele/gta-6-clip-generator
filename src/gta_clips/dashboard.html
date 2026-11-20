@@ -471,7 +471,7 @@ function renderActivity() {
     {label: 'Reason', wrap: true, value: r => r.reason},
   ], data.unavailable, 'None.');
   const jobs = data.runner && data.runner.jobs ? Object.entries(data.runner.jobs) : [];
-  const names = {'ingest': 'Clip finished VODs', 'render-live': 'Render saved windows', 'publish': 'Send approved clips', 'ready': 'Fill ready-to-post folder'};
+  const names = {'ingest': 'Clip finished VODs', 'render-live': 'Render saved windows', 'publish': 'Send approved clips', 'ready': 'Fill ready-to-post folder', 'stats': 'Measure clips and read views'};
   const live = data.runner && data.runner.fresh;
   table('jobs', [
     {label: 'Job', value: ([n]) => names[n] || n},

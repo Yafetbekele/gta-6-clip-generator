@@ -143,6 +143,9 @@ def render(
         details.update(
             transcribe_seconds=round(transcribed - began, 2), encode_seconds=round(encoded - transcribed, 2),
             word_count=len(words), speech_seconds=round(sum(w.end - w.start for w in words), 2),
+            # Seconds into the clip when the first and last words are spoken.
+            first_word_s=round(words[0].start, 2) if words else None,
+            last_word_s=round(words[-1].end, 2) if words else None,
             language=getattr(transcriber, "language", None) if words else None,
             language_probability=getattr(transcriber, "language_probability", None) if words else None,
         )

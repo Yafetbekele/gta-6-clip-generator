@@ -133,6 +133,45 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ready_exports_day ON ready_exports(account, day)
         """,
     ),
+    (
+        # Everything measurable about a clip, and how each post of it performed.
+        [
+            ("burst_features", "stream_title", "TEXT"),
+            ("burst_features", "stream_tags", "TEXT"),
+            ("burst_features", "is_mature", "INTEGER"),
+            ("chat_seconds", "emotes", "INTEGER"),
+            ("chat_seconds", "cheers", "INTEGER"),
+            ("chat_seconds", "bits", "INTEGER"),
+            ("clip_features", "first_word_s", "REAL"),
+            ("clip_features", "last_word_s", "REAL"),
+        ],
+        """
+        CREATE TABLE IF NOT EXISTS clip_stats (
+            clip_id TEXT PRIMARY KEY REFERENCES clips(id), measured INTEGER NOT NULL DEFAULT (unixepoch()),
+            loudness_lufs REAL, loudness_range_lu REAL, true_peak_dbfs REAL, max_momentary_lufs REAL,
+            loudest_at_s REAL, first_sound_s REAL, silence_fraction REAL, scene_changes INTEGER,
+            chat_messages INTEGER, chat_before INTEGER, chat_after INTEGER, chat_peak_second INTEGER,
+            chat_peak_at_s REAL, chat_emotes INTEGER, chat_cheers INTEGER, chat_bits INTEGER,
+            broadcaster_type TEXT, broadcaster_age_days REAL, error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS broadcasters (
+            broadcaster_id TEXT PRIMARY KEY, login TEXT, broadcaster_type TEXT, created_at REAL,
+            description TEXT, fetched INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE TABLE IF NOT EXISTS posts (
+            platform TEXT NOT NULL, video_id TEXT NOT NULL, clip_id TEXT REFERENCES clips(id),
+            account TEXT, url TEXT, source TEXT NOT NULL, added INTEGER NOT NULL DEFAULT (unixepoch()),
+            PRIMARY KEY (platform, video_id)
+        );
+        CREATE TABLE IF NOT EXISTS post_stats (
+            platform TEXT NOT NULL, video_id TEXT NOT NULL, fetched INTEGER NOT NULL,
+            published REAL, views INTEGER, likes INTEGER, comments INTEGER, shares INTEGER,
+            avg_view_seconds REAL, avg_view_percent REAL, subscribers_gained INTEGER,
+            PRIMARY KEY (platform, video_id, fetched),
+            FOREIGN KEY (platform, video_id) REFERENCES posts(platform, video_id)
+        );
+        """,
+    ),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

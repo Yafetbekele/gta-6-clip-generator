@@ -2,15 +2,20 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import random
 import sys
+import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from gta_clips.config import AccountConfig, PathsConfig, load_config
 from gta_clips.db import connect
+from gta_clips.post_stats import parse_url, record
 from gta_clips.ready import FOLDER, allowed_by, export_due
+from gta_clips.view_model import MIN_POSTS, train
 
 
 class AllowedByTest(unittest.TestCase):
@@ -48,7 +53,7 @@ class ExportTest(unittest.TestCase):
                           description, hashtags, state, created, account)
                           VALUES (?, 'v', 'streamer', ?, 0, 30, '', ?, 'desc', '#gta6', ?, ?, ?)""",
                        (clip_id, relative, f"Title {clip_id}", state, int(self.now - age), account))
-            anchor = len(clip_id) * 1000 + sum(map(ord, clip_id))
+            anchor = db.execute("SELECT COALESCE(MAX(anchor), 0) + 1000 FROM live_bursts").fetchone()[0]
             db.execute("""INSERT INTO live_bursts(stream_id, anchor, broadcaster_id, streamer, game_name, messages, state, retry_at, clip_id,
                           trigger_kind, account) VALUES ('st', ?, 'b', 'streamer', 'g', ?, 'clipped', 0, ?, ?, ?)""",
                        (anchor, messages, clip_id, kind, account))
@@ -62,7 +67,7 @@ class ExportTest(unittest.TestCase):
         with connect(self.config.paths.database) as db:
             return [row[0] for row in db.execute("SELECT clip_id FROM ready_exports ORDER BY exported, rowid")]
 
-    def test_ranks_rating_then_burst_then_spike_and_skips_the_rest(self):
+    def test_offers_only_allowed_clips_with_their_note(self):
         self._clip("small", messages=10)
         self._clip("big", messages=40)
         self._clip("loved", messages=5, score=5)
@@ -71,16 +76,47 @@ class ExportTest(unittest.TestCase):
         self._clip("rejected", messages=99, state="rejected")
         self._clip("old", messages=99, age=4 * 86400)
         self._clip("missing", messages=99, write=False)
-        added = export_due(replace(self.config, runtime=replace(self.config.runtime, ready_per_day=4)), self.now)
-        self.assertEqual(self._exported(), ["loved", "big", "small", "control"])
+        added = export_due(replace(self.config, runtime=replace(self.config.runtime, ready_per_day=10)), self.now)
+        self.assertEqual(sorted(self._exported()), ["big", "control", "loved", "small"])
         folder = self.config.paths.data_dir / FOLDER / "2026-11-19" / "gta6-1"
         self.assertEqual({path.parent for path in added}, {folder})
-        note = added[0].with_suffix(".txt").read_text(encoding="utf-8")
-        self.assertIn("Channel: GTA 6 (gta6-1)\nPost to:\n  YouTube: GTA 6 Clips\n  TikTok: gta_clips\nSign-in email: clips@example.com\n\n", note)
+        note = next(path for path in added if "Title loved" in path.name).with_suffix(".txt").read_text(encoding="utf-8")
+        self.assertIn("Channel: GTA 6 (gta6-1)\nPost to:\n  YouTube: GTA 6 Clips\n  TikTok: gta_clips\n"
+                      "Sign-in email: clips@example.com\n\n", note)
         self.assertNotIn("Instagram", note)
-        self.assertIn("Title loved", note)
         self.assertIn("#gta6", note)
         self.assertTrue((self.config.paths.data_dir / "clips/gta6-1/loved.mp4").is_file())  # copied, not moved
+
+    def test_order_is_random_without_enough_posts(self):
+        for index in range(8):
+            self._clip(f"c{index}", messages=10 + index)
+        config = replace(self.config, runtime=replace(self.config.runtime, ready_per_day=1))
+        picks = set()
+        for seed in range(6):
+            with connect(config.paths.database) as db:
+                db.execute("DELETE FROM ready_exports")
+            export_due(config, self.now, random.Random(seed))
+            picks.update(self._exported())
+        self.assertGreater(len(picks), 1)
+
+    def test_views_model_ranks_by_stats_of_posted_clips(self):
+        # Posted clips whose chat jumped more got more views; the model should prefer such clips.
+        fetched = int(time.time())
+        for index in range(MIN_POSTS + 5):
+            clip_id = f"posted{index}"
+            self._clip(clip_id, messages=10 + 3 * index, age=10 * 86400)
+            record(self.config, f"https://youtube.com/shorts/vid{index:05d}", clip_id)
+            with connect(self.config.paths.database) as db:
+                db.execute("""INSERT INTO post_stats(platform, video_id, fetched, published, views)
+                              VALUES ('youtube', ?, ?, ?, ?)""",
+                           (f"vid{index:05d}", fetched, fetched - 5 * 86400, 100 * (index + 1)))
+        self.assertIsNotNone(train(self.config))
+        self._clip("quiet", messages=10)
+        self._clip("loud", messages=150)
+        config = replace(self.config, runtime=replace(self.config.runtime, ready_per_day=1))
+        with patch("gta_clips.ready.EXPLORE", 0):
+            export_due(config, datetime(2026, 11, 19, 1, 0).timestamp(), random.Random(0))
+        self.assertEqual(self._exported(), ["loud"])
 
     def test_daily_share_is_kept_and_clips_are_offered_once(self):
         for index in range(5):
@@ -91,7 +127,43 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(len(export_due(config, early)), 2)  # one per account set so far today
         self.assertEqual(len(export_due(config, early)), 0)
         self.assertEqual(len(export_due(config, self.now)), 1)  # gta6-1 gets its second; irl-en has no more
-        self.assertEqual(sorted(self._exported()), ["c3", "c4", "other"])
+        exported = self._exported()
+        self.assertEqual(len(exported), len(set(exported)))
+        self.assertIn("other", exported)
+
+
+class PostLinkTest(unittest.TestCase):
+    def test_links_are_parsed(self):
+        self.assertEqual(parse_url("https://www.youtube.com/shorts/AbC_123-xy"), ("youtube", "AbC_123-xy"))
+        self.assertEqual(parse_url("https://youtu.be/AbC_123-xy"), ("youtube", "AbC_123-xy"))
+        self.assertEqual(parse_url("https://www.tiktok.com/@gta_clips/video/7311111111111"), ("tiktok", "7311111111111"))
+        self.assertEqual(parse_url("https://www.instagram.com/reel/C9xYz/"), ("instagram", "C9xYz"))
+        self.assertIsNone(parse_url("https://example.com/video/1"))
+
+
+class PostTimeTest(unittest.TestCase):
+    def test_publish_time_is_read_from_post_ids(self):
+        from gta_clips.post_stats import posted_at
+        self.assertEqual(posted_at("tiktok", "7710089425287499030"), 1795145083.0)
+        self.assertAlmostEqual(posted_at("instagram", "Df8zS4RIuk_"), 1795149034.491, places=2)
+        self.assertIsNone(posted_at("instagram", "bad code!"))
+        self.assertIsNone(posted_at("youtube", "hWMhn5jvMjw"))
+
+
+class AudioParseTest(unittest.TestCase):
+    def test_loudness_and_silence(self):
+        from gta_clips.clip_stats import parse_audio
+        stdout = ("frame:0 pts:0 pts_time:0\nlavfi.r128.M=-40.0\n"
+                  "frame:1 pts:4800 pts_time:12.5\nlavfi.r128.M=-12.25\n")
+        stderr = ("[silencedetect @ 1] silence_start: 0\n[silencedetect @ 1] silence_end: 1.5 | silence_duration: 1.5\n"
+                  "[silencedetect @ 1] silence_start: 50\n"
+                  "Summary:\n  Integrated loudness:\n    I:         -20.4 LUFS\n  Loudness range:\n"
+                  "    LRA:         6.1 LU\n  True peak:\n    Peak:       -0.5 dBFS\n")
+        stats = parse_audio(stdout, stderr, 60)
+        self.assertEqual((stats["loudness_lufs"], stats["loudness_range_lu"], stats["true_peak_dbfs"]), (-20.4, 6.1, -0.5))
+        self.assertEqual((stats["max_momentary_lufs"], stats["loudest_at_s"]), (-12.25, 12.5))
+        self.assertEqual(stats["first_sound_s"], 1.5)
+        self.assertAlmostEqual(stats["silence_fraction"], (1.5 + 10) / 60, places=3)
 
 
 if __name__ == "__main__":

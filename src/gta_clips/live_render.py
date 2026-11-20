@@ -157,9 +157,10 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
             db.execute("UPDATE clips SET account=? WHERE id=?", (account.name if account else None, clip_id))
             db.execute(
                 """INSERT OR REPLACE INTO clip_features(clip_id, source, speech_seconds, word_count,
-                       language, language_probability) VALUES (?, ?, ?, ?, ?, ?)""",
+                       language, language_probability, first_word_s, last_word_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (clip_id, burst["trigger_kind"], details.get("speech_seconds"), details.get("word_count"),
-                 details.get("language"), details.get("language_probability")),
+                 details.get("language"), details.get("language_probability"),
+                 details.get("first_word_s"), details.get("last_word_s")),
             )
             db.execute("UPDATE burst_features SET muted_overlap_s=? WHERE stream_id=? AND anchor=?",
                        (muted, stream_id, anchor))
@@ -170,6 +171,12 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
             )
     logging.info("Queued live clip %s from %s for review (download %.1fs)", clip_id,
                  burst["streamer"], downloaded - began)
+    # Measure now: the video may be removed once every destination has it.
+    try:
+        from .clip_stats import measure
+        measure(config, budget_seconds=120, clip_ids=[clip_id])
+    except Exception:
+        logging.exception("Could not measure %s; `gta-clips stats` will retry", clip_id)
 
 
 def render_due(config: Config, stop: Event | None = None, context: RenderContext | None = None):

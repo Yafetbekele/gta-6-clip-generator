@@ -57,6 +57,10 @@ publish_every_minutes = 0
 # up to ready_per_day per account set, spread through the day. Nothing is uploaded.
 ready_every_minutes = 30
 ready_per_day = 6
+# Measures each clip (loudness, speech, scene cuts, chat) and reads views of posted clips.
+# Clips are offered in random order until 30 YouTube posts are 2+ days old; after that, in
+# order of views predicted from those stats. See data/view-model.json.
+stats_every_minutes = 60
 
 [editing]
 renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Requires layout="fit".

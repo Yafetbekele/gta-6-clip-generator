@@ -62,6 +62,9 @@ class Broadcast:
     game_name: str = ""
     # Feed.key of the category and language this channel was found in.
     feed: str = ""
+    title: str = ""
+    tags: str = ""  # Comma-separated stream tags
+    is_mature: bool = False
 
 
 @dataclass
@@ -175,11 +178,14 @@ class ChatBuckets:
     def __init__(self):
         self.data: dict[tuple[str, int], list] = {}
 
-    def add(self, stream_id: str, timestamp: float, chatter: str | None):
-        bucket = self.data.setdefault((stream_id, int(timestamp)), [0, set()])
+    def add(self, stream_id: str, timestamp: float, chatter: str | None, emotes: int = 0, bits: int = 0):
+        bucket = self.data.setdefault((stream_id, int(timestamp)), [0, set(), 0, 0, 0])
         bucket[0] += 1
         if chatter:
             bucket[1].add(chatter)
+        bucket[2] += emotes
+        bucket[3] += 1 if bits else 0
+        bucket[4] += bits
 
     def flush(self, config: Config, everything: bool = False):
         # Messages more than 10 s late are ignored, so older seconds are final.
@@ -187,13 +193,18 @@ class ChatBuckets:
         ready = [key for key in self.data if key[1] < cutoff]
         if not ready:
             return
-        rows = [(stream_id, second, self.data[(stream_id, second)][0],
-                 len(self.data[(stream_id, second)][1])) for stream_id, second in ready]
+        rows = []
+        for stream_id, second in ready:
+            messages, chatters, emotes, cheers, bits = self.data[(stream_id, second)]
+            rows.append((stream_id, second, messages, len(chatters), emotes, cheers, bits))
         with connect(config.paths.database) as db:
             db.executemany(
-                """INSERT INTO chat_seconds(stream_id, ts, messages, unique_chatters) VALUES (?, ?, ?, ?)
+                """INSERT INTO chat_seconds(stream_id, ts, messages, unique_chatters, emotes, cheers, bits)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(stream_id, ts) DO UPDATE SET messages=messages+excluded.messages,
-                   unique_chatters=MAX(unique_chatters, excluded.unique_chatters)""", rows,
+                   unique_chatters=MAX(unique_chatters, excluded.unique_chatters),
+                   emotes=COALESCE(emotes, 0)+excluded.emotes, cheers=COALESCE(cheers, 0)+excluded.cheers,
+                   bits=COALESCE(bits, 0)+excluded.bits""", rows,
             )
         for key in ready:
             del self.data[key]
@@ -238,12 +249,13 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
         db.execute(
             """INSERT INTO burst_features(stream_id, anchor, baseline_per_10s, observed_seconds,
                    multiplier, minimum_messages, warmup_seconds, unique_chatters, viewer_count,
-                   viewer_rank, language, stream_age_s, covered_seconds)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   viewer_rank, language, stream_age_s, covered_seconds, stream_title, stream_tags, is_mature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (stream.stream_id, anchor, baseline, observed_seconds, config.live.spike_multiplier,
              config.live.messages_per_10_seconds, config.live.warmup_seconds,
              features.get("unique_chatters"), stream.viewer_count or None, stream.rank or None,
-             stream.language or None, timestamp - stream.started_at, features.get("covered_seconds")),
+             stream.language or None, timestamp - stream.started_at, features.get("covered_seconds"),
+             stream.title or None, stream.tags or None, int(stream.is_mature)),
         )
     return True
 
@@ -299,7 +311,8 @@ def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | No
                                     int(row.get("viewer_count") or 0), len(active) + 1,
                                     row.get("language") or "",
                                     row.get("game_name") or (feed.category if feed else ""),
-                                    feed.key if feed else ""))
+                                    feed.key if feed else "", row.get("title") or "",
+                                    ",".join(row.get("tags") or []), bool(row.get("is_mature"))))
     return active
 
 
@@ -501,7 +514,10 @@ def _chat_event(config: Config, packet: dict, desired: dict[str, Broadcast],
     chatter = event.get("chatter_user_id")
     timestamp = _timestamp(metadata["message_timestamp"]).timestamp()
     if buckets is not None:
-        buckets.add(stream.stream_id, timestamp, chatter)
+        fragments = (event.get("message") or {}).get("fragments") or []
+        emotes = sum(1 for fragment in fragments if fragment.get("type") == "emote")
+        bits = int((event.get("cheer") or {}).get("bits") or 0)
+        buckets.add(stream.stream_id, timestamp, chatter, emotes, bits)
     rate = rates.setdefault(stream.stream_id, ChatRate())
     count = rate.observe(timestamp, live, chatter)
     for peak in rate.finished_peaks():

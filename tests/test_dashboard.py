@@ -141,13 +141,14 @@ class RunnerTest(TempConfig):
         self.runner.tick(start)
         self.assertEqual([name for name, _ in self.spawned], ["watch-live"])
         self.runner.tick(start + 61)
-        self.assertEqual([name for name, _ in self.spawned], ["watch-live", "render-live", "ready"])
+        self.assertEqual([name for name, _ in self.spawned], ["watch-live", "render-live", "ready", "stats"])
         status = json.loads((self.folder / "data" / runner.STATUS_FILE).read_text(encoding="utf-8"))
         self.assertTrue(status["in_window"])
         self.assertTrue(status["watcher"]["running"])
         self.assertEqual(status["jobs"]["render-live"]["every_minutes"], 15)
         self.assertEqual(status["jobs"]["publish"]["every_minutes"], 0)
         self.assertEqual(status["jobs"]["ready"]["every_minutes"], 30)
+        self.assertEqual(status["jobs"]["stats"]["every_minutes"], 60)
 
     def test_asks_watcher_to_stop_outside_window(self):
         self.runner.tick(datetime(2026, 11, 18, 16, 59).timestamp())

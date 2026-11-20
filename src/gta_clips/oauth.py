@@ -21,6 +21,9 @@ GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/"
 INSTAGRAM_GRAPH = "https://graph.instagram.com"
 TWITCH_TOKEN = "https://id.twitch.tv/oauth2/token"
+GOOGLE_SCOPES = ("https://www.googleapis.com/auth/youtube.upload",
+                 "https://www.googleapis.com/auth/youtube.readonly",
+                 "https://www.googleapis.com/auth/yt-analytics.readonly")
 
 
 def env(name: str) -> str:
@@ -122,7 +125,8 @@ def _google_authorize(state: str) -> dict:
     def build_url(redirect: str) -> str:
         query = urlencode({
             "client_id": client_id, "redirect_uri": redirect, "response_type": "code",
-            "scope": "https://www.googleapis.com/auth/youtube.upload", "state": state,
+            # Read-only scopes let `gta-clips stats` read each Short's views and watch time.
+            "scope": " ".join(GOOGLE_SCOPES), "state": state,
             "access_type": "offline", "prompt": "consent",
             "code_challenge": challenge, "code_challenge_method": "S256",
         })
@@ -218,9 +222,9 @@ def access_token(path: Path, platform: str, account: str | None = None) -> tuple
         else:
             tiktok = platform == "tiktok"
             prefix = "TIKTOK" if tiktok else "YOUTUBE"
-            key = "client_key" if tiktok else "client_id"
+            id_field = "client_key" if tiktok else "client_id"
             new = _token_request(TIKTOK_TOKEN if tiktok else GOOGLE_TOKEN, {
-                key: env(f"{prefix}_{'CLIENT_KEY' if tiktok else 'CLIENT_ID'}"),
+                id_field: env(f"{prefix}_{'CLIENT_KEY' if tiktok else 'CLIENT_ID'}"),
                 "client_secret": env(f"{prefix}_CLIENT_SECRET"),
                 "grant_type": "refresh_token", "refresh_token": token["refresh_token"],
             })

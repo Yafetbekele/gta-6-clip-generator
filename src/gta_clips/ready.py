@@ -1,4 +1,4 @@
-"""Copy the strongest recent clips of each account set into a folder for posting by hand.
+"""Copy recent clips of each account set into a folder for posting by hand.
 
 Nothing here uploads anything. A person opens the folder, watches each clip and posts it
 (or not) through the platform's own app, which keeps human approval before publication.
@@ -7,35 +7,32 @@ Nothing here uploads anything. A person opens the folder, watches each clip and 
 from datetime import datetime, timedelta
 from pathlib import Path
 import logging
+import random
 import re
 import shutil
 import time
 
 from .config import Config
 from .db import connect
+from .view_model import Model, clip_features, train
 
 FOLDER = "ready-to-post"
 # Clips older than this are not offered any more; the moment has passed.
 MAX_AGE = 3 * 86400
 
-# Ranking, strongest first. A clip you rated 4 or 5 beats everything; a rating of 1 or 2 rules it
-# out. Then chat bursts beat near misses and random comparison windows, and a bigger jump over the
-# channel's normal chat rate beats a smaller one. These are recorded signals, not a trained model.
+# Which clips may be offered. A rejected clip, or one you rated 1 or 2, is never offered.
+# The order among the rest comes from `_order`: stats tied to real views, or random until then.
 CANDIDATES = """
-SELECT c.id, c.path, c.streamer, c.title, c.description, c.hashtags, c.created, r.score,
-       COALESCE(b.trigger_kind, 'burst') AS kind,
-       CAST(b.messages AS REAL) / MAX(COALESCE(f.baseline_per_10s, 1), 1) AS spike,
-       COALESCE(f.unique_chatters, 0) AS chatters
+SELECT c.id, c.path, c.streamer, c.title, c.description, c.hashtags, c.created
 FROM clips c
 LEFT JOIN clip_ratings r ON r.clip_id = c.id
-LEFT JOIN live_bursts b ON b.clip_id = c.id
-LEFT JOIN burst_features f ON f.stream_id = b.stream_id AND f.anchor = b.anchor
 WHERE c.account = ? AND c.state != 'rejected' AND c.created >= ?
   AND COALESCE(r.score, 3) >= 3
   AND NOT EXISTS (SELECT 1 FROM ready_exports e WHERE e.clip_id = c.id)
-ORDER BY (COALESCE(r.score, 0) >= 4) DESC, (COALESCE(b.trigger_kind, 'burst') = 'burst') DESC,
-         spike DESC, chatters DESC, c.created DESC
 """
+# With a views model, this share of picks is still random, so the model keeps seeing clips
+# it would not have chosen and can correct itself.
+EXPLORE = 0.2
 
 
 def allowed_by(per_day: int, moment: datetime) -> int:
@@ -62,8 +59,23 @@ def _note(account, clip) -> str:
             f"Clip ID: {clip['id']}\n")
 
 
-def export_due(config: Config, now: float | None = None) -> list[Path]:
-    """Add the next best clip for each account set whose share for today is not used up yet."""
+def _order(db, candidates: list, model: Model | None, rng: random.Random) -> list:
+    """Highest predicted views first, with some random picks; fully random without a model."""
+    remaining = list(candidates)
+    rng.shuffle(remaining)
+    if model is None or not remaining:
+        return remaining
+    found = clip_features(db, [clip["id"] for clip in remaining])
+    predicted = dict(zip(found, model.predict(list(found.values()))))
+    remaining.sort(key=lambda clip: -predicted.get(clip["id"], float("-inf")))
+    ordered = []
+    while remaining:
+        ordered.append(remaining.pop(rng.randrange(len(remaining)) if rng.random() < EXPLORE else 0))
+    return ordered
+
+
+def export_due(config: Config, now: float | None = None, rng: random.Random | None = None) -> list[Path]:
+    """Add the next clips for each account set whose share for today is not used up yet."""
     per_day = config.runtime.ready_per_day
     if not config.accounts or per_day <= 0:
         return []
@@ -72,6 +84,8 @@ def export_due(config: Config, now: float | None = None) -> list[Path]:
     day = moment.strftime("%Y-%m-%d")
     base = config.paths.data_dir
     added = []
+    rng = rng or random.Random()
+    model = train(config, now)
     for account in config.accounts:
         with connect(config.paths.database) as db:
             done = db.execute("SELECT COUNT(*) FROM ready_exports WHERE account=? AND day=?",
@@ -79,7 +93,8 @@ def export_due(config: Config, now: float | None = None) -> list[Path]:
             wanted = allowed_by(per_day, moment) - done
             if wanted <= 0:
                 continue
-            candidates = db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall()
+            candidates = _order(db, db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall(),
+                                model, rng)
         for clip in candidates:
             if wanted <= 0:
                 break

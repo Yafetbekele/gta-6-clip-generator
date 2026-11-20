@@ -188,12 +188,22 @@ instagram = ""
 
 ## Ready to post by hand
 
-`gta-clips ready` (run by `gta-clips run` every `runtime.ready_every_minutes`, 30 by default) copies the strongest recent clips of each account set into `ready-to-post/<day>/<set name>/` inside the storage directory. Nothing is uploaded: you watch each clip and post it yourself.
+`gta-clips ready` (run by `gta-clips run` every `runtime.ready_every_minutes`, 30 by default) copies recent clips of each account set into `ready-to-post/<day>/<set name>/` inside the storage directory. Nothing is uploaded: you watch each clip and post it yourself.
 
 - Each set gets up to `runtime.ready_per_day` clips a day (6 by default), spread through the day: one after midnight, then one more every 24 / `ready_per_day` hours.
-- Clips you rated 4 or 5 come first; clips rated 1 or 2, rejected clips and clips older than three days are left out. Then chat bursts come before comparison clips, and a bigger jump over the channel's normal chat rate before a smaller one. These are recorded signals, not a trained model.
+- Rejected clips, clips you rated 1 or 2, and clips older than three days are left out.
+- The order comes from real post numbers, not hand-picked weights (see below). Until enough posts have views, clips are picked at random so the first posts are a fair sample.
 - Each video has a `.txt` beside it with the title, description and hashtags, and the set's `youtube`, `tiktok`, `instagram` and `email` names when they are filled in. Never put passwords in the config.
 - The videos are copies; the originals stay in `clips/`. Day folders older than a week are removed.
+
+## Clip stats and views
+
+`gta-clips stats` (run every `runtime.stats_every_minutes`, 60 by default) records facts about each clip and how its posts did.
+
+- **Per clip** (`clip_stats`): integrated loudness, loudness range, true peak, the loudest moment and when it happens, when sound starts, how much is silent, scene cuts, chat messages during, before and after the clip, the busiest chat second, emotes, cheers and bits, and the streamer's partner/affiliate status and channel age. Rendering also records when the first and last words are spoken. Stream title, tags and the mature flag are saved with each chat window.
+- **Per post** (`posts`, `post_stats`): posts made by the publisher or the browser uploader are found automatically. For a clip posted by hand, record its link with `gta-clips posted <Clip ID> <link>` (the Clip ID is in the clip's `.txt`). YouTube views, likes and comments come from the YouTube Data API, and average watch time and average % watched from the YouTube Analytics API, as snapshots every 6 hours for 60 days.
+- **Views model**: once 30 YouTube posts are at least two days old, a ridge regression is fitted from those clips' stats to the log of their views, and the ready-to-post folder offers clips in order of predicted views. One pick in five stays random so the model keeps getting tested on clips it would not choose. `data/view-model.json` shows how many posts it used and which stats weigh most. Its fit is measured on the same posts it learned from, so it overstates accuracy.
+- Reading views needs the read-only YouTube scopes. Logins made before they were added can only upload: run `gta-clips auth youtube --account NAME` again for each set. TikTok and Instagram numbers are not read yet.
 
 ## Authorize platform access
 
