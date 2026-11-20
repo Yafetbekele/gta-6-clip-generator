@@ -57,7 +57,7 @@ Use English site UI. The program checks the Studio channel ID or the site's auth
 
 Substitute `tiktok` or `instagram` to post there. Preview sends nothing. YouTube without `--publish` requests a private upload; TikTok and Instagram require `--publish`. Captions contain only the Title, Description and Hashtags sections, never the sign-in email or account notes. Streamer credit links are required; oversized captions are rejected rather than cutting credits off. Videos are not re-encoded. Instagram selects Original crop to preserve the full frame.
 
-Defaults: no daily cap and no hourly spacing, at most one per command. Missing or null daily_limit means unlimited; spacing_minutes defaults to 0. Optional numeric limits can still be configured. `daily_limit: 0` disables uploads. `--max` does not override spacing or daily limits. Run again when due. No background process is installed automatically. In Windows Task Scheduler, run the command hourly **only when you are logged on**, with the project as the Start in folder. Use a separate task per platform/account and avoid simultaneous tasks (a shared file lock protects the ledger). No AI service needs to be running.
+Defaults: no daily cap and no hourly spacing, at most one per command. Missing or null daily_limit means unlimited; spacing_minutes defaults to 0. Optional numeric limits can still be configured. `daily_limit: 0` disables uploads. `--max` does not override spacing or daily limits. Run again when due. No background process is installed automatically. In Windows Task Scheduler, run the command hourly **only when you are logged on**, with the project as the Start in folder. The hourly scheduler runs up to two uploads concurrently. Separate account/platform profile locks prevent overlapping use of the same Chrome profile; two shared upload slots also enforce the limit for manual runs. A third manual upload stops with a busy message; retry when a slot is free. Each scheduled destination writes to data/browser-upload/hourly-PLATFORM-ACCOUNT.log. No AI service needs to be running.
 
 ## Duplicates and recovery
 
@@ -82,3 +82,5 @@ For a held clip, inspect the platform first. If already posted, use `record-post
 ```
 
 No automatic retries of posting, browser fingerprint changes, proxy rotation, or CAPTCHA workarounds are used. Failed checks require attention. The original files stay in place.
+
+Launcher option **8 — set channel URL or handle** saves a YouTube Studio channel URL/channel ID or a TikTok/Instagram handle locally. Changing identity disables hourly posting. Login works before identity setup; verification and uploads still require an exact identity.

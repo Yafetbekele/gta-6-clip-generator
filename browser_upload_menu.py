@@ -1,7 +1,26 @@
 """Small local launcher; credentials are entered only on the platform's own website."""
 import json
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 from gta_clips.browser_upload import main
+
+
+def parse_identity(platform, value):
+    value = value.strip()
+    if platform == 'youtube':
+        if value.startswith('https://'):
+            url = urlsplit(value)
+            if url.hostname not in ('studio.youtube.com', 'www.youtube.com', 'youtube.com'):
+                raise ValueError('Use a YouTube Studio channel URL or a channel ID.')
+            value = url.path.removeprefix('/channel/').rstrip('/')
+        if not re.fullmatch(r'UC[A-Za-z0-9_-]{22}', value):
+            raise ValueError('Paste the Studio URL ending in /channel/UC… or the exact channel ID.')
+        return 'channel_id', value
+    value = value.lstrip('@')
+    if not re.fullmatch(r'[A-Za-z0-9_.]+', value):
+        raise ValueError('Enter the handle, such as @mychannel, without a URL.')
+    return 'handle', value
 
 
 def choose(label, options):
@@ -23,7 +42,26 @@ if __name__ == '__main__':
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
     account = choose('Account folder', list(config['accounts']))
     platform = choose('Platform', list(config['accounts'][account]))
-    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting'])
+    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting', 'set channel URL or handle'])
+    if action == 'set channel URL or handle':
+        prompt = 'Paste YouTube Studio channel URL or channel ID: ' if platform == 'youtube' else 'Enter account @handle: '
+        while True:
+            value = input(prompt).strip()
+            if value.lower() == 'q':
+                raise SystemExit(0)
+            try:
+                key, identity = parse_identity(platform, value)
+                break
+            except ValueError as exc:
+                print(f'{exc} (or q to cancel)')
+        target = config['accounts'][account][platform]
+        if target.get(key) != identity:
+            target['auto_post'] = False
+        target[key] = identity
+        settings.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
+        print(f'Saved {platform} identity for {account}: {identity}')
+        print('Close the dedicated Chrome window, then choose verify-login. Changed identities disable hourly posting.')
+        raise SystemExit(0)
     if action in ('enable hourly posting', 'disable hourly posting'):
         enabled = action == 'enable hourly posting'
         config['accounts'][account][platform]['auto_post'] = enabled

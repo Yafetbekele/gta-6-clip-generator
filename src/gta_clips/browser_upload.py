@@ -8,11 +8,27 @@ import re
 import sqlite3
 import subprocess
 import time
+from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .db import worker_lock
+from .db import worker_lock, WorkerBusy
+
+
+@contextmanager
+def upload_slot(state):
+    """Bound browser uploads across scheduler and manual processes."""
+    with ExitStack() as stack:
+        for slot in range(2):
+            try:
+                stack.enter_context(worker_lock(state, f'browser-upload-slot-{slot}'))
+                break
+            except WorkerBusy:
+                continue
+        else:
+            raise WorkerBusy('Two uploads are already running; retry when one finishes')
+        yield
 
 PLATFORMS = ("youtube", "tiktok", "instagram")
 START = {
@@ -63,7 +79,7 @@ def scan(root: Path, account: str) -> list[Clip]:
 
 def ledger(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row
     db.execute("""CREATE TABLE IF NOT EXISTS posts (
         platform TEXT, account TEXT, clip_id TEXT, digest TEXT,
@@ -208,11 +224,13 @@ def open_normal_chrome(state, platform, account):
     print("Choose verify-login in the launcher next. Signing in alone does not verify the uploader.")
 
 
-def settings(path, account, platform):
+def settings(path, account, platform, *, require_identity=True):
     config = json.loads(path.read_text(encoding="utf-8-sig"))
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", account):
         raise ValueError("Invalid account folder name")
     target = config["accounts"][account][platform]
+    if not require_identity:
+        return config, target
     if platform == "youtube":
         if not re.fullmatch(r"UC[\w-]{22}", target["channel_id"]):
             raise ValueError("Configure an exact YouTube channel ID")
@@ -235,7 +253,8 @@ def main(argv=None):
     parser.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
-        config, target = settings(args.settings, args.account, args.platform)
+        config, target = settings(args.settings, args.account, args.platform,
+                                  require_identity=args.action != "login")
         base = args.settings.resolve().parent
         state = (base / config.get("state_dir", "data/browser-upload")).resolve()
         root = (base / config["ready_folder"]).resolve()
@@ -246,7 +265,10 @@ def main(argv=None):
         spacing = float(target.get("spacing_minutes", 0)) * 60
         if (daily is not None and daily < 0) or spacing < 0:
             raise ValueError("Posting limits must be nonnegative")
-        with worker_lock(state, "browser-upload"):
+        with ExitStack() as locks:
+            locks.enter_context(worker_lock(state, f"browser-upload-{args.platform}-{args.account}"))
+            if args.action == 'run':
+                locks.enter_context(upload_slot(state))
             db = ledger(state / "posts.sqlite3")
             try:
                 if args.scheduled:

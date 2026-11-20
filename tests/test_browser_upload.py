@@ -1,9 +1,12 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile
+from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile, main
+from gta_clips.browser_upload import upload_slot
+from gta_clips.db import worker_lock, WorkerBusy
 
 
 NOTE = '''Channel: Test (test)
@@ -27,6 +30,23 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_two_upload_slots_and_release(self):
+        with upload_slot(self.root):
+            with upload_slot(self.root):
+                with self.assertRaises(WorkerBusy):
+                    with upload_slot(self.root):
+                        self.fail('Third concurrent upload was allowed')
+            with upload_slot(self.root):
+                pass
+
+    def test_profile_locks_are_independent(self):
+        with worker_lock(self.root, 'browser-upload-youtube-first'):
+            with worker_lock(self.root, 'browser-upload-youtube-second'):
+                pass
+            with self.assertRaises(WorkerBusy):
+                with worker_lock(self.root, 'browser-upload-youtube-first'):
+                    self.fail('Same profile was allowed twice')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -54,6 +74,21 @@ class BrowserUploadTests(unittest.TestCase):
             'chrome.exe', f'--user-data-dir={chrome_profile(self.root, "youtube", "test").resolve()}',
             '--new-window', 'https://studio.youtube.com/',
         ])
+
+    def test_login_before_identity_setup_but_upload_still_blocked(self):
+        config = self.root / 'browser-upload.json'
+        config.write_text(json.dumps({
+            'ready_folder': str(self.root),
+            'accounts': {'test': {'youtube': {'channel_id': ''}}},
+        }), encoding='utf-8')
+        args = ['--settings', str(config), '--account', 'test', '--platform', 'youtube']
+        with patch('gta_clips.browser_upload.open_normal_chrome') as launch:
+            self.assertEqual(main(args + ['login']), 0)
+            launch.assert_called_once()
+        for action in ('verify-login', 'run'):
+            with self.subTest(action=action), self.assertRaises(SystemExit) as stopped:
+                main(args + [action])
+            self.assertEqual(stopped.exception.code, 1)
 
     def test_missing_credit_and_bad_metadata_stop(self):
         self.video.with_suffix('.txt').write_text(NOTE.replace('https://www.twitch.tv/streamer', ''), encoding='utf-8')
