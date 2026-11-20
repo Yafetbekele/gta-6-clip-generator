@@ -1,4 +1,4 @@
-"""Read visible YouTube Studio counts using existing browser logins; no API keys."""
+"""Read visible YouTube, TikTok, and Instagram counts with saved browser logins."""
 import argparse
 import json
 from pathlib import Path
@@ -78,7 +78,7 @@ def store_rows(db, account, known, rows, fetched):
     return saved
 
 
-def collect(settings, force=False, only_account=None):
+def collect(settings, force=False, only_account=None, only_platform=None):
     settings = settings.resolve()
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
     options = settings.parent / 'config.toml'
@@ -98,65 +98,87 @@ def collect(settings, force=False, only_account=None):
             platform TEXT,video_id TEXT,fetched INTEGER,published REAL,views INTEGER,likes INTEGER,
             comments INTEGER,shares INTEGER,avg_view_seconds REAL,avg_view_percent REAL,subscribers_gained INTEGER,
             PRIMARY KEY(platform,video_id,fetched));''')
-        upload_db.execute('''CREATE TABLE IF NOT EXISTS browser_metric_checks (
-            account TEXT PRIMARY KEY, checked REAL, successful INTEGER, detail TEXT)''')
+        upload_db.execute('''CREATE TABLE IF NOT EXISTS metric_collection_checks (
+            platform TEXT, account TEXT, checked REAL, successful INTEGER, detail TEXT, identity TEXT,
+            PRIMARY KEY(platform,account))''')
         upload_db.commit()
+        try:
+            clips = {r['id']: dict(r) for r in db.execute('SELECT id,title,description FROM clips')}
+        except sqlite3.OperationalError:
+            clips = {}
         from playwright.sync_api import sync_playwright
+        from .social_metrics import tiktok_rows, instagram_rows, store_social
         with worker_lock(state, 'browser-metrics'), sync_playwright() as pw:
             for account, targets in config['accounts'].items():
                 if only_account and account != only_account:
                     continue
-                target = targets.get('youtube', {})
-                if not target.get('channel_id') or not chrome_profile(state, 'youtube', account).is_dir():
-                    continue
-                previous = upload_db.execute('SELECT checked,successful FROM browser_metric_checks WHERE account=?', (account,)).fetchone()
-                if not force and previous and time.time() - previous['checked'] < (21600 if previous['successful'] else 1800):
-                    continue
-                known = {row['video_id']: {'clip_id': row['clip_id'], 'published': None} for row in
-                         db.execute("SELECT * FROM posts WHERE platform='youtube' AND account=?", (account,))}
-                for row in upload_db.execute("SELECT * FROM posts WHERE platform='youtube' AND account=? AND state='posted'", (account,)):
-                    remote = video_id(row['url'])
-                    if remote:
-                        # Confirmed submission time is a conservative age estimate for training.
-                        known[remote] = {'clip_id': row['clip_id'], 'published': row['finished']}
-                if not known:
-                    continue
-                success = False
-                stage = 'open browser'
-                try:
-                    with worker_lock(state, f'browser-upload-youtube-{account}'), upload_slot(state):
-                        context = pw.chromium.launch_persistent_context(str(chrome_profile(state, 'youtube', account)),
-                            channel='chrome', headless=False, chromium_sandbox=True, locale='en-US',
-                            viewport={'width': 1440, 'height': 1000})
-                        try:
-                            page = context.pages[0] if context.pages else context.new_page()
-                            page.set_default_timeout(30000)
-                            stage = 'verify login'
-                            verify_saved_account(page, 'youtube', account, target, upload_db)
-                            stage = 'read Shorts table'
+                for platform, target in targets.items():
+                    if only_platform and platform != only_platform:
+                        continue
+                    identity = target.get('channel_id' if platform == 'youtube' else 'handle', '').lstrip('@').lower()
+                    if not identity or not chrome_profile(state, platform, account).is_dir():
+                        continue
+                    attempts = [dict(r) for r in upload_db.execute(
+                        'SELECT * FROM posts WHERE platform=? AND account=?', (platform, account))]
+                    if not attempts:
+                        continue
+                    previous = upload_db.execute('SELECT * FROM metric_collection_checks WHERE platform=? AND account=?', (platform, account)).fetchone()
+                    if not force and previous and previous['identity'] == identity and time.time() - previous['checked'] < (21600 if previous['successful'] else 1800):
+                        continue
+                    known = {row['video_id']: {'clip_id': row['clip_id'], 'published': None} for row in
+                             db.execute('SELECT * FROM posts WHERE platform=? AND account=?', (platform, account))}
+                    candidates = []
+                    for row in attempts:
+                        if row['clip_id'] in clips:
+                            candidates.append({**clips[row['clip_id']], 'finished': row['finished']})
+                        if platform == 'youtube' and row['state'] == 'posted':
+                            remote = video_id(row['url'])
+                            if remote:
+                                known[remote] = {'clip_id': row['clip_id'], 'published': row['finished']}
+                    if platform == 'youtube' and not known:
+                        continue
+                    success = False
+                    stage = 'open browser'
+                    try:
+                        with worker_lock(state, f'browser-upload-{platform}-{account}'), upload_slot(state):
+                            context = pw.chromium.launch_persistent_context(str(chrome_profile(state, platform, account)),
+                                channel='chrome', headless=False, chromium_sandbox=True, locale='en-US',
+                                viewport={'width': 1440, 'height': 1000})
                             try:
-                                rows = collect_rows(page)
-                            except Exception:
+                                page = context.pages[0] if context.pages else context.new_page()
+                                page.set_default_timeout(30000)
+                                stage = 'verify login'
+                                verify_saved_account(page, platform, account, target, upload_db)
+                                stage = 'read metrics'
                                 try:
-                                    page.screenshot(path=str(state / f'metrics-error-{account}.png'))
+                                    if platform == 'youtube':
+                                        rows = collect_rows(page)
+                                    elif platform == 'tiktok':
+                                        rows = tiktok_rows(page)
+                                    else:
+                                        rows = instagram_rows(page, identity)
                                 except Exception:
-                                    pass
-                                raise
-                            with db:
-                                count = store_rows(db, account, known, rows, time.time())
-                            success = count > 0
-                            detail = f'Saved {count} YouTube view snapshots'
-                        finally:
-                            context.close()
-                except WorkerBusy:
-                    results.append({'account': account, 'status': 'busy; will check next cycle'})
-                    continue
-                except Exception as exc:
-                    detail = f'Metrics check failed at {stage} ({type(exc).__name__}); login or layout needs attention'
-                with upload_db:
-                    upload_db.execute('INSERT OR REPLACE INTO browser_metric_checks VALUES(?,?,?,?)',
-                                      (account, time.time(), int(success), detail))
-                results.append({'account': account, 'status': detail})
+                                    try:
+                                        page.screenshot(path=str(state / f'metrics-error-{platform}-{account}.png'))
+                                    except Exception:
+                                        pass
+                                    raise
+                                with db:
+                                    count = (store_rows(db, account, known, rows, time.time()) if platform == 'youtube'
+                                             else store_social(db, upload_db, account, platform, rows, candidates, time.time()))
+                                success = count > 0
+                                detail = f'Saved {count} {platform} view snapshots'
+                            finally:
+                                context.close()
+                    except WorkerBusy:
+                        results.append({'account': account, 'platform': platform, 'status': 'busy; will check next cycle'})
+                        continue
+                    except Exception as exc:
+                        detail = f'Metrics check failed at {stage} ({type(exc).__name__}); login or layout needs attention'
+                    with upload_db:
+                        upload_db.execute('INSERT OR REPLACE INTO metric_collection_checks VALUES(?,?,?,?,?,?)',
+                                          (platform, account, time.time(), int(success), detail, identity))
+                    results.append({'account': account, 'platform': platform, 'status': detail})
     finally:
         upload_db.close()
         db.close()
@@ -169,9 +191,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--settings', type=Path, default=Path('browser-upload.json'))
     parser.add_argument('--account')
+    parser.add_argument('--platform', choices=('youtube','tiktok','instagram'))
     parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
     try:
-        print(json.dumps(collect(args.settings, args.force, args.account), indent=2))
+        print(json.dumps(collect(args.settings, args.force, args.account, args.platform), indent=2))
     except WorkerBusy:
         print('A metrics collection is already running; it will refresh the reports when finished.')
