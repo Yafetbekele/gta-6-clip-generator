@@ -292,7 +292,8 @@ def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | No
     active = []
     for row in rows:
         if (row["game_id"] == game_id and row["type"] == "live" and row["id"].isdecimal()
-                and (not language or row.get("language") == language)):
+                and (not language or row.get("language") == language)
+                and int(row.get("viewer_count") or 0) >= config.live.min_viewers):
             active.append(Broadcast(row["id"], row["user_id"], row["user_login"],
                                     _timestamp(row["started_at"]).timestamp(),
                                     int(row.get("viewer_count") or 0), len(active) + 1,

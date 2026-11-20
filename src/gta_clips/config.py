@@ -84,6 +84,8 @@ DEFAULT_IGNORED_CHATTERS = ("nightbot", "streamelements", "moobot", "fossabot", 
 class LiveConfig:
     warmup_seconds: int = 300
     max_channels: int = 15
+    # Live channels with fewer viewers than this are not watched. 0 watches any size.
+    min_viewers: int = 0
     # 0 means no absolute floor: a burst is judged only against the channel's normal rate.
     messages_per_10_seconds: int = 0
     spike_multiplier: float = 3.0
@@ -372,6 +374,7 @@ def _live(raw: object) -> LiveConfig:
             "live.near_miss_interval_seconds", 0),
         warmup_seconds=_integer(options.get("warmup_seconds", 300), "live.warmup_seconds", 0),
         max_channels=_integer(options.get("max_channels", defaults.max_channels), "live.max_channels", 1, 20),
+        min_viewers=_integer(options.get("min_viewers", defaults.min_viewers), "live.min_viewers", 0),
         messages_per_10_seconds=_integer(options.get("messages_per_10_seconds", defaults.messages_per_10_seconds),
                                          "live.messages_per_10_seconds", 0),
         spike_multiplier=multiplier,

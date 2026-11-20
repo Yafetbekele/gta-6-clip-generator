@@ -24,6 +24,8 @@ require_motion = true
 [live]
 warmup_seconds = 300
 max_channels = 15
+# Channels with fewer live viewers are not watched. 0 watches any size.
+min_viewers = 0
 # A burst is chat at this multiple of the channel's rate over the last 5 minutes.
 spike_multiplier = 4.0
 cooldown_seconds = 900

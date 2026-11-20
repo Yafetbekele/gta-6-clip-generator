@@ -46,6 +46,8 @@ SETTINGS = (
             group="What to watch"),
     Setting("live", "max_channels", "int", "Channels watched at once", "The most-viewed live channels, up to 20. Ignored when account sets are configured.",
             1, 20, "What to watch"),
+    Setting("live", "min_viewers", "int", "Minimum viewers",
+            "Live channels with fewer viewers are not watched. 0 watches any size.", 0, 10000000, "What to watch"),
     Setting("live", "spike_multiplier", "float", "Times the normal chat rate",
             "A burst is judged only against the channel's normal rate over the last 5 minutes.", 1, 100, "Burst detection"),
     Setting("live", "min_unique_chatters", "int", "Different chatters needed",

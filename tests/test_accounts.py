@@ -117,6 +117,17 @@ class FeedTest(unittest.TestCase):
         self.assertEqual(streams[0].feed, "Just Chatting|es")
         self.assertEqual(streams[0].game_name, "Just Chatting")
 
+    def test_small_channels_are_skipped(self):
+        feed = next(feed for feed in self.config.feeds if feed.language == "es")
+        twitch = MagicMock()
+        twitch.pages.return_value = iter([
+            {"id": str(index), "user_id": login, "user_login": login, "game_id": "509658", "type": "live",
+             "started_at": "2026-11-19T10:00:00Z", "viewer_count": viewers, "language": "es", "game_name": "Just Chatting"}
+            for index, (login, viewers) in enumerate([("big", 5000), ("edge", 1000), ("small", 999)], 1)])
+        config = replace(self.config, live=replace(self.config.live, min_viewers=1000))
+        streams = _active_streams(twitch, config, "509658", 10, feed)
+        self.assertEqual([(stream.login, stream.rank) for stream in streams], [("big", 1), ("edge", 2)])
+
     def test_windows_alternate_between_accounts_sharing_a_feed(self):
         streams = [replace(_stream(f"s{i}", f"{i}", 1, "Grand Theft Auto VI|en"), started_at=0) for i in range(4)]
         for stream in streams:
