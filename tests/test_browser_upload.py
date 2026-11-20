@@ -35,6 +35,7 @@ class BrowserUploadTests(unittest.TestCase):
             with self.subTest(legacy=legacy):
                 page = MagicMock()
                 page.get_by_role.return_value.is_visible.return_value = legacy
+                page.get_by_role.return_value.first.is_visible.return_value = legacy
                 notice = page.get_by_role.return_value.filter.return_value
                 notice.is_visible.return_value = not legacy
                 clip = Clip(self.video, 'clip', 'digest', 'Title', 'Credit')

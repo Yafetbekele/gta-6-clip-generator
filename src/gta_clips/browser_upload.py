@@ -314,16 +314,20 @@ def instagram(page, clip, publish):
         pass
     if notice.is_visible():
         notice.get_by_role('button', name='OK', exact=True).click()
-    crop = button(page, "Select crop")
+    print('Instagram: selecting original crop', flush=True)
+    crop = button(page, "Select crop").first
     if crop.is_visible():
         crop.click()
     else:
         page.locator('svg[aria-label="Select crop"]').click()
     page.get_by_text("Original", exact=True).click()
+    print('Instagram: opening caption editor', flush=True)
     button(page, "Next").click()
     button(page, "Next").click()
     page.get_by_role("textbox", name=re.compile(r'^(Write|Add) a caption\.\.\.$')).fill(caption)
+    print('Instagram: submitting post', flush=True)
     button(page, "Share").click()
+    print('Instagram: waiting for sharing confirmation', flush=True)
     page.get_by_text(re.compile(r"^Your (?:reel|post) has been shared\.?$", re.I)).wait_for(timeout=180_000)
     return ""
 
