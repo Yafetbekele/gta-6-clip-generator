@@ -23,6 +23,10 @@ def parse_identity(platform, value):
     return 'handle', value
 
 
+class MenuQuit(Exception):
+    pass
+
+
 def choose(label, options):
     print(f"\n{label}")
     for i, item in enumerate(options, 1):
@@ -30,28 +34,36 @@ def choose(label, options):
     while True:
         answer = input("Number (or q to quit): ").strip()
         if answer.lower() == "q":
-            raise SystemExit(0)
+            raise MenuQuit()
         if answer.isdigit() and 1 <= int(answer) <= len(options):
             return options[int(answer) - 1]
 
 
-if __name__ == '__main__':
-    settings = Path(__file__).resolve().parent / 'browser-upload.json'
+def run_menu_action(settings):
     if not settings.is_file():
         raise SystemExit('Copy browser-upload.example.json to browser-upload.json and configure your accounts first.')
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
     preferred = ['gta6-1', 'gta6-2', 'gta6-3']
     accounts = [name for name in preferred if name in config['accounts']]
     accounts += [name for name in config['accounts'] if name not in accounts]
-    account = choose('Account folder', accounts)
+    selected = choose('Account folder', accounts + ['ALL ACCOUNTS STATUS'])
+    if selected == 'ALL ACCOUNTS STATUS':
+        from gta_clips.browser_status import display_status
+        display_status(settings)
+        return
+    account = selected
     platform = choose('Platform', list(config['accounts'][account]))
-    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting', 'set channel URL or handle'])
+    action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting', 'set channel URL or handle', 'all accounts status'])
+    if action == 'all accounts status':
+        from gta_clips.browser_status import display_status
+        display_status(settings)
+        return
     if action == 'set channel URL or handle':
         prompt = 'Paste YouTube Studio channel URL or channel ID: ' if platform == 'youtube' else 'Enter account @handle: '
         while True:
             value = input(prompt).strip()
             if value.lower() == 'q':
-                raise SystemExit(0)
+                return
             try:
                 key, identity = parse_identity(platform, value)
                 break
@@ -64,7 +76,7 @@ if __name__ == '__main__':
         settings.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
         print(f'Saved {platform} identity for {account}: {identity}')
         print('Close the dedicated Chrome window, then choose verify-login. Changed identities disable hourly posting.')
-        raise SystemExit(0)
+        return
     if action in ('enable hourly posting', 'disable hourly posting'):
         enabled = action == 'enable hourly posting'
         config['accounts'][account][platform]['auto_post'] = enabled
@@ -83,13 +95,39 @@ if __name__ == '__main__':
             print('Confirmed submissions under review count as successful upload tests.')
         else:
             print('Hourly posting disabled.')
-        raise SystemExit(0)
+        return
     argv = ['--settings', str(settings), '--account', account, '--platform', platform]
     if action == 'publish one':
         print('This publishes the next eligible ready-folder video using the saved title and caption.')
         if input('Type POST to publish: ').strip() != 'POST':
-            raise SystemExit('Cancelled.')
+            print('Cancelled.')
+            return
         argv += ['run', '--publish', '--max', '1']
     else:
         argv += [action]
-    raise SystemExit(main(argv))
+    main(argv)
+
+
+def launch():
+    settings = Path(__file__).resolve().parent / 'browser-upload.json'
+    while True:
+        try:
+            run_menu_action(settings)
+        except MenuQuit:
+            return
+        except SystemExit as exc:
+            if exc.code not in (None, 0, 1):
+                print(exc.code)
+        except (OSError, ValueError, KeyError, RuntimeError) as exc:
+            print(f'Stopped: {exc}')
+        try:
+            input('\nPress Enter to return to the menu (Ctrl+C to quit)...')
+        except (KeyboardInterrupt, EOFError):
+            return
+
+
+if __name__ == '__main__':
+    try:
+        launch()
+    except (KeyboardInterrupt, EOFError):
+        print('\nClosed launcher.')

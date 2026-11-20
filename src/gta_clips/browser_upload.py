@@ -91,7 +91,22 @@ def ledger(path: Path):
         platform TEXT, account TEXT, clip_id TEXT, digest TEXT,
         state TEXT, started REAL, finished REAL, url TEXT, detail TEXT,
         PRIMARY KEY(platform, account, clip_id), UNIQUE(platform, account, digest))""")
+    db.execute('''CREATE TABLE IF NOT EXISTS login_checks (
+        platform TEXT, account TEXT, identity TEXT, verified INTEGER, checked REAL,
+        PRIMARY KEY(platform, account))''')
     return db
+
+
+def verify_saved_account(page, platform, account, target, db):
+    identity = target.get('channel_id' if platform == 'youtube' else 'handle', '').lstrip('@').lower()
+    verified = False
+    try:
+        verify_account(page, platform, target)
+        verified = True
+    finally:
+        with db:
+            db.execute('INSERT OR REPLACE INTO login_checks VALUES (?,?,?,?,?)',
+                       (platform, account, identity, int(verified), time.time()))
 
 
 def exists(db, platform, account, clip):
@@ -477,7 +492,7 @@ def execute(args, config, target, state, root, db, daily, spacing):
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(30_000)
             if args.action == "verify-login":
-                verify_account(page, platform, target)
+                verify_saved_account(page, platform, account, target, db)
                 print("Verified account in automated Chrome. No files uploaded.")
                 return 0
             done = 0
@@ -486,7 +501,7 @@ def execute(args, config, target, state, root, db, daily, spacing):
                     continue
                 if done >= args.maximum or not allowed(db, platform, account, daily, spacing, time.time()):
                     break
-                verify_account(page, platform, target)
+                verify_saved_account(page, platform, account, target, db)
                 # Commit BEFORE any file is sent. A crash or uncertain result is never auto-retried.
                 claim(db, platform, account, clip)
                 print(f"Uploading {clip.title}", flush=True)

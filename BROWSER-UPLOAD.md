@@ -34,6 +34,8 @@ Edit `browser-upload.json` with each account folder's exact YouTube channel ID o
 
 For a menu instead of commands, double-click **Browser Uploader.cmd** in the project folder. Pick the account, platform and Preview/Login/Status/Publish one. Publishing requires typing POST. It uses exactly the same ledger and limits as the commands below.
 
+The launcher stays open after actions and handled errors; press Enter to return to the menu or enter `q` at a numbered menu to quit. Choose **ALL ACCOUNTS STATUS** from the account menu, or action **9 — all accounts status**, to view all destinations. It shows hourly posting ON/OFF, the last login verification with its timestamp, confirmed post and under-review counts, and scheduler eligibility. Login checks are saved by verify-login and posting, keyed to the configured identity. Existing sessions initially show Not checked until their next verification; changing the identity requires a fresh check. The overview does not open browsers or test current sign-ins automatically.
+
 ```powershell
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform youtube --account gta6-2
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform tiktok --account gta6-2
