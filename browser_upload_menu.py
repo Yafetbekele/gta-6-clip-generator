@@ -40,7 +40,10 @@ if __name__ == '__main__':
     if not settings.is_file():
         raise SystemExit('Copy browser-upload.example.json to browser-upload.json and configure your accounts first.')
     config = json.loads(settings.read_text(encoding='utf-8-sig'))
-    account = choose('Account folder', list(config['accounts']))
+    preferred = ['gta6-1', 'gta6-2', 'gta6-3']
+    accounts = [name for name in preferred if name in config['accounts']]
+    accounts += [name for name in config['accounts'] if name not in accounts]
+    account = choose('Account folder', accounts)
     platform = choose('Platform', list(config['accounts'][account]))
     action = choose('Action', ['preview', 'login', 'status', 'publish one', 'verify-login', 'enable hourly posting', 'disable hourly posting', 'set channel URL or handle'])
     if action == 'set channel URL or handle':

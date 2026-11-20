@@ -2,10 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile, main
-from gta_clips.browser_upload import upload_slot
+from gta_clips.browser_upload import upload_slot, wait_youtube_checks
 from gta_clips.db import worker_lock, WorkerBusy
 
 
@@ -30,6 +30,30 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_new_checks_require_both_visible_success_results(self):
+        for count, visible, passes in ((2, True, True), (1, True, False), (2, False, False)):
+            with self.subTest(count=count, visible=visible):
+                page = MagicMock()
+                legacy = MagicMock()
+                legacy.is_visible.return_value = False
+                results = MagicMock()
+                results.count.return_value = count
+                results.nth.return_value.is_visible.return_value = visible
+                page.get_by_text.side_effect = lambda text, **kw: legacy if text.startswith('Checks complete') else results
+                page.get_by_role.return_value.is_visible.return_value = True
+                with patch('gta_clips.browser_upload.time.monotonic', side_effect=[0, 0, 2]):
+                    if passes:
+                        wait_youtube_checks(page, timeout=1)
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            wait_youtube_checks(page, timeout=1)
+
+    def test_legacy_checks_still_accepted(self):
+        page = MagicMock()
+        page.get_by_text.return_value.is_visible.return_value = True
+        wait_youtube_checks(page)
+        page.get_by_role.assert_not_called()
+
     def test_two_upload_slots_and_release(self):
         with upload_slot(self.root):
             with upload_slot(self.root):

@@ -135,6 +135,20 @@ def verify_account(page, platform, target):
             raise RuntimeError(f"{platform} Profile link does not match configured handle")
 
 
+def wait_youtube_checks(page, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if page.get_by_text('Checks complete. No issues found.', exact=True).is_visible():
+            return
+        # New Studio layout reports two separate results on Initial check.
+        if page.get_by_role('heading', name='Initial check', exact=True).is_visible():
+            results = page.get_by_text('No issues found', exact=True)
+            if results.count() == 2 and all(results.nth(i).is_visible() for i in range(2)):
+                return
+        page.wait_for_timeout(1000)
+    raise RuntimeError('YouTube checks did not confirm success; inspect the saved draft')
+
+
 def youtube(page, clip, publish):
     button(page, "Create").click()
     page.get_by_text("Upload videos", exact=True).last.click()
@@ -143,8 +157,8 @@ def youtube(page, clip, publish):
     title.fill(clip.title)
     page.get_by_role("textbox", name="Tell viewers about your video (type @ to mention a channel)", exact=True).fill(clip.description)
     page.get_by_role("radio", name="No, it's not made for kids", exact=True).check()
-    page.get_by_role("tab", name="Checks", exact=True).click()
-    page.get_by_text("Checks complete. No issues found.", exact=True).wait_for(timeout=600_000)
+    page.get_by_role("tab", name=re.compile(r"^(Checks|Initial check)$")).click()
+    wait_youtube_checks(page)
     page.get_by_role("tab", name="Visibility", exact=True).click()
     page.get_by_role("radio", name="Public" if publish else "Private", exact=True).check()
     url = page.locator('a#video-link').first.get_attribute("href") or ""
@@ -334,7 +348,7 @@ def execute(args, config, target, state, root, db, daily, spacing):
     with sync_playwright() as pw:
         profile = chrome_profile(state, platform, account)
         print("Close the dedicated login window before continuing; Chrome cannot share an open profile.", flush=True)
-        context = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False, locale="en-US",
+        context = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False, locale="en-US", chromium_sandbox=True,
                                                        viewport={"width": 1440, "height": 1000})
         try:
             page = context.pages[0] if context.pages else context.new_page()
