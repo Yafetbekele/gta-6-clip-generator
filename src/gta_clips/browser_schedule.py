@@ -18,7 +18,7 @@ def readiness(db, account, platform, target, now):
                       (account, platform)).fetchall()
     if any(r['state'] == 'held' for r in rows):
         return 'needs review: uncertain upload'
-    if not any(r['state'] == 'posted' for r in rows):
+    if not any(r['state'] in ('posted', 'under_review') for r in rows):
         return 'needs successful test upload'
     if rows and now - max(r['started'] for r in rows) < 3600:
         return 'waiting for hourly interval'

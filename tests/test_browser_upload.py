@@ -95,7 +95,9 @@ class BrowserUploadTests(unittest.TestCase):
         success.is_visible.side_effect = [False, False, True]
         modal = MagicMock()
         modal.is_visible.return_value = True
-        page.get_by_text.side_effect = lambda text, **kw: modal if text == 'Continue to post?' else success
+        review = MagicMock()
+        review.is_visible.return_value = False
+        page.get_by_text.side_effect = lambda text, **kw: (review if not isinstance(text, str) else modal if text == 'Continue to post?' else success)
         confirm_tiktok_post(page)
         page.get_by_role.assert_called_once_with('button', name='Post now', exact=True)
         page.get_by_role.return_value.click.assert_called_once()
@@ -104,6 +106,28 @@ class BrowserUploadTests(unittest.TestCase):
         page = MagicMock()
         page.get_by_text.return_value.is_visible.return_value = True
         confirm_tiktok_post(page)
+        page.get_by_role.assert_not_called()
+
+    def test_tiktok_matching_post_under_review_completes_submission(self):
+        page = MagicMock()
+        absent, entry = MagicMock(), MagicMock()
+        absent.is_visible.return_value = False
+        entry.count.return_value = 1
+        entry.is_visible.return_value = True
+        row = entry.locator.return_value
+        row.count.return_value = 1
+        row.get_by_text.return_value.is_visible.return_value = True
+        page.get_by_text.side_effect = lambda text, **kw: entry if text == 'Unique clip title' else absent
+        self.assertEqual(confirm_tiktok_post(page, title='Unique clip title'), 'under_review')
+        page.get_by_role.assert_not_called()
+
+    def test_tiktok_under_review_notice_completes_without_reposting(self):
+        page = MagicMock()
+        success, review = MagicMock(), MagicMock()
+        success.is_visible.return_value = False
+        review.is_visible.return_value = True
+        page.get_by_text.side_effect = lambda text, **kw: success if isinstance(text, str) else review
+        self.assertEqual(confirm_tiktok_post(page), 'under_review')
         page.get_by_role.assert_not_called()
 
     def test_tiktok_verifies_on_main_site_then_returns_to_studio(self):

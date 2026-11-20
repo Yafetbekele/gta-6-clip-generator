@@ -8,6 +8,14 @@ from gta_clips.browser_schedule import readiness, tick
 
 
 class ScheduleTests(BrowserUploadTests):
+    def test_review_submission_counts_as_test_and_is_not_retried(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'tiktok', 'test', clip)
+        finish(self.db, 'tiktok', 'test', clip, 'under_review')
+        self.db.execute('update posts set started=10000')
+        self.db.commit()
+        self.assertEqual(readiness(self.db, 'test', 'tiktok', {'auto_post': True}, 13600), 'ready')
+
     def test_tick_runs_two_accounts_concurrently(self):
         path = self.root / 'settings.json'
         path.write_text(json.dumps({

@@ -39,6 +39,12 @@ START = {
 
 
 @dataclass
+class UploadResult:
+    state: str
+    url: str = ''
+
+
+@dataclass
 class Clip:
     file: Path
     clip_id: str
@@ -214,12 +220,28 @@ def youtube(page, clip, publish):
     return url
 
 
-def confirm_tiktok_post(page, timeout=180):
+def confirm_tiktok_post(page, timeout=180, title=None):
     deadline = time.monotonic() + timeout
     confirmed = False
     while time.monotonic() < deadline:
         if page.get_by_text('Your video has been uploaded', exact=False).is_visible():
-            return
+            return 'posted'
+        # A completed submission can enter moderation without being public yet.
+        review = page.get_by_text(re.compile(r'^(?:(?:Your|This) (?:video|post) is (?:under review|being reviewed)|(?:Video|Post) (?:under review|submitted for review))[.!]?$', re.I))
+        if review.is_visible():
+            return 'under_review'
+        # Studio can redirect straight to Posts instead of showing a success toast.
+        # Match this submission, never an unrelated older video's review badge.
+        if title:
+            entry = page.get_by_text(title, exact=False)
+            if entry.count() == 1 and entry.is_visible():
+                row = entry.locator('xpath=ancestor::*[.//*[normalize-space(text())="Everyone" or normalize-space(text())="Only me" or normalize-space(text())="Friends"]][1]')
+                if row.count() == 1:
+                    if row.get_by_text('Content under review', exact=True).is_visible():
+                        print('TikTok accepted this clip for review; it may remain private until review completes.', flush=True)
+                        return 'under_review'
+                    if row.get_by_text('Everyone', exact=True).is_visible():
+                        return 'posted'
         # Studio asks for a second confirmation when content checks are pending.
         if not confirmed and page.get_by_text('Continue to post?', exact=True).is_visible():
             button(page, 'Post now').click()
@@ -256,9 +278,9 @@ def tiktok(page, clip, publish):
     page.locator('[contenteditable="true"]').fill(caption)
     ensure_tiktok_everyone(page)
     button(page, "Post").click(timeout=600_000)
-    confirm_tiktok_post(page)
+    state = confirm_tiktok_post(page, title=clip.title)
     # TikTok may not expose the resulting URL in its success modal.
-    return ""
+    return UploadResult(state)
 
 
 def instagram(page, clip, publish):
@@ -440,13 +462,15 @@ def execute(args, config, target, state, root, db, daily, spacing):
                 claim(db, platform, account, clip)
                 print(f"Uploading {clip.title}", flush=True)
                 try:
-                    url = ADAPTERS[platform](page, clip, args.publish)
+                    result = ADAPTERS[platform](page, clip, args.publish)
                 except Exception as exc:
                     finish(db, platform, account, clip, "held", detail=f"{type(exc).__name__}: inspect site before retrying")
                     print("Stopped. Upload held for manual inspection; it will not be retried automatically.")
                     return 1
-                finish(db, platform, account, clip, "posted" if args.publish else "private", url)
-                print(f"Confirmed {'publication' if args.publish else 'private save'}: {url or clip.clip_id}", flush=True)
+                state_name = result.state if isinstance(result, UploadResult) else ('posted' if args.publish else 'private')
+                url = result.url if isinstance(result, UploadResult) else result
+                finish(db, platform, account, clip, state_name, url)
+                print(f"Confirmed {state_name}: {url or clip.clip_id}", flush=True)
                 done += 1
             print(f"Completed {done} upload(s). Tracked clips and schedule-limited clips were skipped.")
             return 0
