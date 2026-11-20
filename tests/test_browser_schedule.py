@@ -8,6 +8,16 @@ from gta_clips.browser_schedule import readiness, tick
 
 
 class ScheduleTests(BrowserUploadTests):
+    def test_configured_longer_posting_interval(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        finish(self.db, 'youtube', 'test', clip, 'posted')
+        self.db.execute('update posts set started=10000')
+        self.db.commit()
+        target = {'auto_post': True, 'spacing_minutes': 144}
+        self.assertEqual(readiness(self.db, 'test', 'youtube', target, 13600), 'waiting for 144-minute interval')
+        self.assertEqual(readiness(self.db, 'test', 'youtube', target, 18640), 'ready')
+
     def test_failed_clip_does_not_block_next_hour_or_get_retried(self):
         clip, = scan(self.root, 'test')
         claim(self.db, 'youtube', 'test', clip)

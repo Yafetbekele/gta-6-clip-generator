@@ -20,8 +20,9 @@ def readiness(db, account, platform, target, now):
     # Held clips remain excluded by the upload ledger, but do not stop this account.
     if not any(r['state'] in ('posted', 'under_review') for r in rows):
         return 'needs successful test upload'
-    if rows and now - max(r['started'] for r in rows) < 3600:
-        return 'waiting for hourly interval'
+    spacing = max(3600, float(target.get('spacing_minutes', 0)) * 60)
+    if rows and now - max(r['started'] for r in rows) < spacing:
+        return 'waiting for hourly interval' if spacing == 3600 else f'waiting for {spacing / 60:g}-minute interval'
     return 'ready'
 
 
