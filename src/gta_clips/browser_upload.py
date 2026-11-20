@@ -515,6 +515,13 @@ def execute(args, config, target, state, root, db, daily, spacing):
                 url = result.url if isinstance(result, UploadResult) else result
                 finish(db, platform, account, clip, state_name, url)
                 print(f"Confirmed {state_name}: {url or clip.clip_id}", flush=True)
+                try:
+                    from .ready_cleanup import cleanup_used
+                    cleaned = cleanup_used(config, root, state)
+                    if cleaned:
+                        print(f'Deleted {cleaned} fully submitted ready clip(s).', flush=True)
+                except Exception as exc:
+                    print(f'Ready cleanup deferred ({type(exc).__name__}); upload remains recorded.', flush=True)
                 done += 1
             print(f"Completed {done} upload(s). Tracked clips and schedule-limited clips were skipped.")
             return 0

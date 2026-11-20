@@ -38,6 +38,8 @@ The launcher stays open after actions and handled errors; press Enter to return 
 
 View-tracking reports are exported to `data/view-tracking/index.html` after each scheduler cycle. The Desktop `Twitch Clips/View Tracking` folder links to those reports. They include latest linked-post metrics, all metric snapshots, measured clip features, upload records, and the saved model summary as JSON downloads. Refresh manually with `.venv\Scripts\python.exe -m gta_clips.view_tracking --settings browser-upload.json`. Exporting reads existing local data only; collecting new view metrics remains the stats worker's responsibility. Blank metrics mean unknown, not zero. Original databases stay in place.
 
+Used ready copies are cleaned after successful uploads and scheduled cycles. The MP4 and matching TXT are deleted only once every destination with a configured channel ID/handle for that set has a confirmed `posted` or `under_review` ledger record. Disabled destinations with saved identities still count, so their pending clips are retained. Failed, canceled, private, or uncertain attempts do not qualify. Original source clips and tracking/duplicate-prevention records remain intact.
+
 ```powershell
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform youtube --account gta6-2
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload login --platform tiktok --account gta6-2
