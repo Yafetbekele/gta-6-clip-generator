@@ -16,8 +16,7 @@ def readiness(db, account, platform, target, now):
         return 'disabled'
     rows = db.execute('SELECT state,started FROM posts WHERE account=? AND platform=?',
                       (account, platform)).fetchall()
-    if any(r['state'] == 'held' for r in rows):
-        return 'needs review: uncertain upload'
+    # Held clips remain excluded by the upload ledger, but do not stop this account.
     if not any(r['state'] in ('posted', 'under_review') for r in rows):
         return 'needs successful test upload'
     if rows and now - max(r['started'] for r in rows) < 3600:

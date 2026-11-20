@@ -3,11 +3,26 @@ import json
 import threading
 from unittest.mock import patch
 from test_browser_upload import BrowserUploadTests
-from gta_clips.browser_upload import scan, claim, finish
+from gta_clips.browser_upload import scan, claim, finish, Clip, exists
 from gta_clips.browser_schedule import readiness, tick
 
 
 class ScheduleTests(BrowserUploadTests):
+    def test_failed_clip_does_not_block_next_hour_or_get_retried(self):
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        finish(self.db, 'youtube', 'test', clip, 'posted')
+        failed = Clip(self.video, 'failed-clip', 'other-digest', 'Failed clip', '')
+        claim(self.db, 'youtube', 'test', failed)
+        self.db.execute("update posts set started=10000 where state='posted'")
+        self.db.execute("update posts set started=13600 where state='held'")
+        self.db.commit()
+        target = {'auto_post': True}
+        self.assertEqual(readiness(self.db, 'test', 'youtube', target, 17199), 'waiting for hourly interval')
+        self.assertEqual(readiness(self.db, 'test', 'youtube', target, 17200), 'ready')
+        self.assertTrue(exists(self.db, 'youtube', 'test', failed))
+        self.assertEqual(self.db.execute("select state from posts where clip_id='failed-clip'").fetchone()[0], 'held')
+
     def test_review_submission_counts_as_test_and_is_not_retried(self):
         clip, = scan(self.root, 'test')
         claim(self.db, 'tiktok', 'test', clip)
@@ -41,7 +56,7 @@ class ScheduleTests(BrowserUploadTests):
         self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'needs successful test upload')
         clip, = scan(self.root,'test')
         claim(self.db,'youtube','test',clip)
-        self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'needs review: uncertain upload')
+        self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'needs successful test upload')
         finish(self.db,'youtube','test',clip,'posted')
         self.db.execute('update posts set started=10000')
         self.db.commit()
