@@ -45,6 +45,7 @@ def export_tracking(settings):
         history = read_table(data / 'state.sqlite3', 'post_stats')
         features = read_table(data / 'state.sqlite3', 'clip_stats')
         attempts = read_table(state / 'posts.sqlite3', 'posts')
+        checks = read_table(state / 'posts.sqlite3', 'browser_metric_checks')
         latest = {}
         for row in history:
             key = (row['platform'], row['video_id'])
@@ -53,6 +54,7 @@ def export_tracking(settings):
         merged = [{**post, **latest.get((post['platform'], post['video_id']), {})} for post in posts]
         for name, rows in [('posts', merged), ('view-history', history), ('clip-features', features), ('upload-history', attempts)]:
             write_file(folder / (name + '.json'), json.dumps(rows, indent=2, ensure_ascii=False))
+        write_file(folder / 'collection-status.json', json.dumps(checks, indent=2))
         model = data / 'view-model.json'
         write_file(folder / 'model.json', model.read_text(encoding='utf-8') if model.is_file() else json.dumps({'status': 'No saved model summary found'}))
         def cell(value):
@@ -71,7 +73,9 @@ def export_tracking(settings):
 <h1>Clip view tracking</h1>'''
         html += f'<p>Report updated: {datetime.now().astimezone().isoformat(timespec="seconds")}</p>'
         html += f'<p>{len(posts)} linked posts · {len(history)} metric snapshots · {len(features)} measured clips · {len(attempts)} upload records</p>'
-        html += '<p>Reports refresh after each scheduler cycle. View numbers come from the existing stats worker, not from this page. A dash means no measurement; it does not mean zero views. TikTok/Instagram uploads without links appear below but cannot be matched to view metrics yet.</p>'
+        html += '<p>Reports refresh after each scheduler cycle. View numbers come from the browser collector or stats worker, not from this page. A dash means no measurement; it does not mean zero views. TikTok/Instagram uploads without links appear below but cannot be matched to view metrics yet.</p>'
+        html += '<p>YouTube views and comments are read from the signed-in Studio table about every six hours. Failed checks retry after 30 minutes; busy profiles wait for the next scheduler cycle. Likes and watch time remain unknown when the table does not show them.</p>'
+        html += '<p><a href="collection-status.json">Collector status</a></p><ul>' + ''.join(f'<li>{cell(row["account"])}: {cell(row["detail"])}</li>' for row in checks) + '</ul>'
         html += '<p>Downloads: ' + ' · '.join(f'<a href="{name}.json">{label}</a>' for name, label in [('posts','Latest post metrics'),('view-history','All view snapshots'),('clip-features','Clip features'),('upload-history','Upload records'),('model','Ranking model')]) + '</p>'
         html += '<h2>Latest measured views</h2><div class="table"><table><tr><th>Set</th><th>Platform</th><th>Clip</th><th>Views</th><th>Likes</th><th>Comments</th><th>Link</th></tr>' + (body or '<tr><td colspan="7">No linked posts imported by the stats worker yet.</td></tr>') + '</table></div>'
         html += '<h2>All upload records</h2><div class="table"><table><tr><th>Set</th><th>Platform</th><th>Clip</th><th>Status</th><th>Link</th></tr>' + uploads + '</table></div></html>'

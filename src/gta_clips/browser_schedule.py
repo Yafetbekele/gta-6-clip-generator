@@ -84,6 +84,13 @@ def tick(path, dry_run=False):
             temp.replace(state / 'hourly-status.json')
     if not dry_run:
         try:
+            from .browser_metrics import collect
+            metrics = collect(path)
+            for result in metrics:
+                logging.info('View collection %s: %s', result['account'], result['status'])
+        except Exception as exc:
+            logging.warning('Browser view collection deferred (%s)', type(exc).__name__)
+        try:
             from .ready_cleanup import cleanup_used
             cleanup_used(config, root, state)
         except Exception as exc:
