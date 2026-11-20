@@ -69,7 +69,20 @@ if __name__ == '__main__':
         enabled = action == 'enable hourly posting'
         config['accounts'][account][platform]['auto_post'] = enabled
         settings.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
-        print('Hourly posting enabled; a successful test upload is required before it runs.' if enabled else 'Hourly posting disabled.')
+        if enabled:
+            from gta_clips.browser_upload import ledger
+            from gta_clips.browser_schedule import readiness
+            import time
+            state = (settings.parent / config.get('state_dir', 'data/browser-upload')).resolve()
+            db = ledger(state / 'posts.sqlite3')
+            try:
+                status = readiness(db, account, platform, config['accounts'][account][platform], time.time())
+            finally:
+                db.close()
+            print(f'Hourly posting enabled for {account}/{platform}. Status: {status}.')
+            print('Confirmed submissions under review count as successful upload tests.')
+        else:
+            print('Hourly posting disabled.')
         raise SystemExit(0)
     argv = ['--settings', str(settings), '--account', account, '--platform', platform]
     if action == 'publish one':
