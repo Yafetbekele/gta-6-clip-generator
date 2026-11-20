@@ -1,12 +1,42 @@
 import tempfile
+import sqlite3
 from pathlib import Path
 import unittest
 
 from gta_clips.browser_upload import scan, ledger, claim, finish
-from gta_clips.ready_cleanup import cleanup_used
+from gta_clips.ready_cleanup import cleanup_used, cleanup_originals
 
 
 class ReadyCleanupTests(unittest.TestCase):
+    def test_original_cleanup_is_bounded_and_preserves_tracking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            (data / 'clips').mkdir()
+            original = data / 'clips' / 'used.mp4'
+            original.write_bytes(b'video')
+            outside = data / 'outside.mp4'
+            outside.write_bytes(b'keep')
+            source = sqlite3.connect(data / 'state.sqlite3')
+            source.execute('CREATE TABLE clips(id,account,path)')
+            source.executemany('INSERT INTO clips VALUES(?,?,?)', [('used', 'test', 'clips/used.mp4'), ('outside', 'test', 'outside.mp4')])
+            source.commit()
+            source.close()
+            db = ledger(data / 'browser-upload' / 'posts.sqlite3')
+            try:
+                config = {'accounts': {'test': {'youtube': {'channel_id': 'id'}}}}
+                self.assertEqual(cleanup_originals(config, data, db), 0)
+                with db:
+                    for clip in ('used', 'outside'):
+                        db.execute("INSERT INTO posts VALUES('youtube','test',?,?, 'posted',1,2,'','')", (clip, clip))
+                self.assertEqual(cleanup_originals(config, data, db), 1)
+                self.assertFalse(original.exists())
+                self.assertTrue(outside.exists())
+                source = sqlite3.connect(data / 'state.sqlite3')
+                self.assertEqual(source.execute('SELECT count(*) FROM clips').fetchone()[0], 2)
+                source.close()
+            finally:
+                db.close()
+
     def test_keeps_clip_until_all_destinations_accept_even_if_disabled(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'ready'
