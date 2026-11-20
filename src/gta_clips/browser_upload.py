@@ -228,6 +228,24 @@ def confirm_tiktok_post(page, timeout=180):
     raise RuntimeError('TikTok publication was not confirmed; inspect Posts before retrying')
 
 
+def ensure_tiktok_everyone(page):
+    """Check the audience field itself, never unrelated caption/page text."""
+    label = page.get_by_text('Who can see this post', exact=True)
+    label.wait_for(state='visible')
+    field = label.locator('xpath=ancestor::*[.//*[@role="combobox"] or .//select or .//*[normalize-space(text())="Everyone" or normalize-space(text())="Friends" or normalize-space(text())="Only you"]][1]')
+    field.wait_for(state='visible')
+    everyone = field.get_by_text('Everyone', exact=True)
+    if not everyone.is_visible():
+        current = field.get_by_text(re.compile(r'^(Friends|Only you)$'))
+        current.click()
+        # TikTok may render the dropdown options outside the field container.
+        page.get_by_text('Everyone', exact=True).click()
+    everyone.wait_for(state='visible')
+    # An open list could expose Everyone without selecting it; never post with it open.
+    if field.get_by_text(re.compile(r'^(Friends|Only you)$')).count():
+        raise RuntimeError('TikTok audience could not be confirmed as Everyone; inspect before posting')
+
+
 def tiktok(page, clip, publish):
     if not publish:
         raise ValueError("TikTok supports preview or explicit publish; no automated draft mode")
@@ -236,8 +254,7 @@ def tiktok(page, clip, publish):
         raise ValueError("TikTok caption exceeds conservative 2200-character limit")
     page.locator('input[type="file"]').set_input_files(str(clip.file))
     page.locator('[contenteditable="true"]').fill(caption)
-    # Require the public audience control to be present; never change private defaults silently.
-    page.get_by_text("Everyone", exact=True).wait_for(state="visible")
+    ensure_tiktok_everyone(page)
     button(page, "Post").click(timeout=600_000)
     confirm_tiktok_post(page)
     # TikTok may not expose the resulting URL in its success modal.

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile, main
-from gta_clips.browser_upload import upload_slot, wait_youtube_checks, confirm_tiktok_post
+from gta_clips.browser_upload import upload_slot, wait_youtube_checks, confirm_tiktok_post, ensure_tiktok_everyone
 from gta_clips.db import worker_lock, WorkerBusy
 
 
@@ -30,6 +30,27 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_tiktok_audience_changes_private_to_everyone(self):
+        page = MagicMock()
+        field = page.get_by_text.return_value.locator.return_value
+        everyone, private = MagicMock(), MagicMock()
+        everyone.is_visible.return_value = False
+        private.count.return_value = 0
+        field.get_by_text.side_effect = lambda name, **kw: everyone if name == 'Everyone' else private
+        ensure_tiktok_everyone(page)
+        private.click.assert_called_once()
+        page.get_by_text.assert_any_call('Everyone', exact=True)
+        page.get_by_text.return_value.click.assert_called_once()
+        everyone.wait_for.assert_called_once_with(state='visible')
+
+    def test_tiktok_ambiguous_audience_blocks_publication(self):
+        page = MagicMock()
+        field = page.get_by_text.return_value.locator.return_value
+        field.get_by_text.return_value.is_visible.return_value = True
+        field.get_by_text.return_value.count.return_value = 1
+        with self.assertRaisesRegex(RuntimeError, 'could not be confirmed'):
+            ensure_tiktok_everyone(page)
+
     def test_tiktok_navigation_anchor_with_nested_listitem(self):
         page = MagicMock()
         page.url = 'https://www.tiktok.com/foryou'
