@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from gta_clips.browser_upload import allowed, claim, exists, finish, ledger, scan, verify_account, open_normal_chrome, chrome_profile, main
-from gta_clips.browser_upload import upload_slot, wait_youtube_checks, confirm_tiktok_post, ensure_tiktok_everyone
+from gta_clips.browser_upload import upload_slot, wait_youtube_checks, confirm_tiktok_post, ensure_tiktok_everyone, instagram, Clip
 from gta_clips.db import worker_lock, WorkerBusy
 
 
@@ -30,6 +30,23 @@ Clip ID: test-clip-1
 
 
 class BrowserUploadTests(unittest.TestCase):
+    def test_instagram_legacy_and_icon_editor_paths(self):
+        for legacy in (True, False):
+            with self.subTest(legacy=legacy):
+                page = MagicMock()
+                page.get_by_role.return_value.is_visible.return_value = legacy
+                notice = page.get_by_role.return_value.filter.return_value
+                notice.is_visible.return_value = not legacy
+                clip = Clip(self.video, 'clip', 'digest', 'Title', 'Credit')
+                instagram(page, clip, True)
+                if not legacy:
+                    page.locator.assert_any_call('svg[aria-label="Post"]')
+                    page.locator.assert_any_call('svg[aria-label="Select crop"]')
+                    notice.get_by_role.assert_called_once_with('button', name='OK', exact=True)
+                captions = [c.kwargs['name'] for c in page.get_by_role.call_args_list if c.args == ('textbox',)]
+                self.assertTrue(captions[0].fullmatch('Add a caption...'))
+                self.assertTrue(captions[0].fullmatch('Write a caption...'))
+
     def test_instagram_icon_sidebar_verifies_username_and_rejects_wrong_one(self):
         for actual, passes in [('joethegoat2334', True), ('other_account', False)]:
             page = MagicMock()

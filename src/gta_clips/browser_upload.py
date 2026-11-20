@@ -301,15 +301,28 @@ def instagram(page, clip, publish):
     caption = f"{clip.title}\n\n{clip.description}"
     if len(caption) > 2200:
         raise ValueError("Instagram caption exceeds 2200 characters")
-    page.get_by_role("link", name=re.compile(r"^New post$|^Create$", re.I)).click()
+    create = page.get_by_role("link", name=re.compile(r"^New post$|^Create$", re.I))
+    if create.is_visible():
+        create.click()
+    else:
+        page.locator('svg[aria-label="Post"]').click()
     page.locator('input[type="file"]').set_input_files(str(clip.file))
+    notice = page.get_by_role('dialog').filter(has_text='Video posts are now shared as reels')
+    try:
+        notice.wait_for(state='visible', timeout=3000)
+    except Exception:
+        pass
+    if notice.is_visible():
+        notice.get_by_role('button', name='OK', exact=True).click()
     crop = button(page, "Select crop")
-    crop.wait_for(state="visible")
-    crop.click()
+    if crop.is_visible():
+        crop.click()
+    else:
+        page.locator('svg[aria-label="Select crop"]').click()
     page.get_by_text("Original", exact=True).click()
     button(page, "Next").click()
     button(page, "Next").click()
-    page.get_by_role("textbox", name="Write a caption...", exact=True).fill(caption)
+    page.get_by_role("textbox", name=re.compile(r'^(Write|Add) a caption\.\.\.$')).fill(caption)
     button(page, "Share").click()
     page.get_by_text(re.compile(r"^Your (?:reel|post) has been shared\.?$", re.I)).wait_for(timeout=180_000)
     return ""
