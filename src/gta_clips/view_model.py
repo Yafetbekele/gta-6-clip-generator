@@ -1,9 +1,12 @@
 """Predict a clip's views from its recorded stats, using only posts that already have views.
 
-A ridge regression is fitted from each posted clip's stats (chat, stream, audio, video) to the
-log of its YouTube views once the post is at least two days old. Until MIN_POSTS posts qualify
-there is no model and callers should pick clips at random, so early posts give a fair sample.
-Ratings and hand-picked weights play no part.
+A ridge regression is fitted from each post's clip stats (chat, stream, audio, video), its
+platform and its account to the log of its views 24 hours after posting, read from the stats
+snapshots. Comparing every post at the same age keeps older posts from winning just for being
+older. Each post is one row, so a clip posted on YouTube and Instagram counts twice. A platform
+whose posts all show zero views tells nothing about clips and is left out. Until MIN_POSTS posts
+qualify there is no model and callers should pick clips at random, so early posts give a fair
+sample. Ratings and hand-picked weights play no part.
 """
 
 from dataclasses import dataclass, field
@@ -17,8 +20,12 @@ from .config import Config
 from .db import connect
 
 MIN_POSTS = 30
-# Views keep growing for a while; a post is compared only once it is this old.
-MIN_POST_AGE = 2 * 86400
+# Every post is compared by its views at this age.
+TARGET_AGE = 24 * 3600
+# If no snapshot was taken before TARGET_AGE, one taken up to this age stands in for it.
+LATEST_STAND_IN = 36 * 3600
+PLATFORMS = ("youtube", "instagram", "tiktok")
+PLATFORM = "platform="
 RIDGE = 10.0
 MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
@@ -80,39 +87,74 @@ class Model:
     trained: float = field(default_factory=time.time)
 
     def _matrix(self, rows: list[dict]) -> np.ndarray:
-        data = np.array([[row.get(name, 0.0 if "=" in name else None) for name in self.names] for row in rows],
-                        dtype=float)
+        data = np.array([[row.get(name, _default(name)) for name in self.names] for row in rows], dtype=float)
+        # A clip not yet posted has no platform: it is scored as the average of the platforms.
+        fill = np.array([self.means[i] if name.startswith(PLATFORM) else self.medians[i]
+                         for i, name in enumerate(self.names)])
         missing = np.isnan(data)
-        data[missing] = np.take(self.medians, np.nonzero(missing)[1])
+        data[missing] = np.take(fill, np.nonzero(missing)[1])
         return (data - self.means) / self.scales
 
     def predict(self, rows: list[dict]) -> np.ndarray:
-        """Predicted log(1 + views)."""
+        """Predicted log(1 + views 24 hours after posting)."""
         return self._matrix(rows) @ self.weights + self.bias if rows else np.array([])
 
     def summary(self) -> dict:
         order = np.argsort(-np.abs(self.weights))
         return {
-            "trained": self.trained, "posts": self.posts, "target": "log(1 + YouTube views), posts 2+ days old",
+            "trained": self.trained, "posts": self.posts, "target": "log(1 + views 24 hours after posting)",
             "fit_r2": round(self.fit_r2, 3),
             "note": "Measured on the same posts it was fitted to, so it overstates how well it predicts.",
             "strongest": [{"stat": self.names[i], "weight": round(float(self.weights[i]), 3)} for i in order[:15]],
         }
 
 
-def training_rows(db, now: float) -> tuple[list[dict], list[float]]:
-    """Each posted clip's features and log views, from its newest snapshot at least MIN_POST_AGE old."""
-    posts = db.execute(
-        """SELECT p.clip_id, MAX(s.views) AS views FROM posts p JOIN post_stats s USING (platform, video_id)
-           WHERE p.platform = 'youtube' AND p.clip_id IS NOT NULL AND s.views IS NOT NULL
-             AND s.published IS NOT NULL AND s.fetched - s.published >= ?
-           GROUP BY p.clip_id""", (MIN_POST_AGE,)).fetchall()
-    views = {row["clip_id"]: row["views"] for row in posts}
-    if not views:
+def _default(name: str):
+    if name.startswith(PLATFORM):
+        return None
+    return 0.0 if "=" in name else None
+
+
+def views_at(snapshots: list[tuple[float, int]], age: float = TARGET_AGE) -> float | None:
+    """Views at ``age`` seconds after posting, from (age, views) snapshots; None if not known yet."""
+    before = max((item for item in snapshots if item[0] <= age), default=None)
+    after = min((item for item in snapshots if item[0] >= age), default=None)
+    if after is None:
+        return None
+    if before is None or after[0] == before[0]:
+        return float(after[1]) if after[0] <= LATEST_STAND_IN else None
+    share = (age - before[0]) / (after[0] - before[0])
+    return before[1] + share * (after[1] - before[1])
+
+
+def training_rows(db, now: float | None = None) -> tuple[list[dict], list[float]]:
+    """One row per post with its clip's features, platform and log views at TARGET_AGE."""
+    snapshots: dict[tuple[str, str], list[tuple[float, int]]] = {}
+    clips: dict[tuple[str, str], str] = {}
+    marks = ",".join("?" * len(PLATFORMS))
+    for row in db.execute(
+            f"""SELECT p.platform, p.video_id, p.clip_id, s.fetched - s.published AS age, s.views
+                FROM posts p JOIN post_stats s USING (platform, video_id)
+                WHERE p.platform IN ({marks}) AND p.clip_id IS NOT NULL AND s.views IS NOT NULL
+                  AND s.published IS NOT NULL""", PLATFORMS):
+        key = (row["platform"], row["video_id"])
+        snapshots.setdefault(key, []).append((row["age"], row["views"]))
+        clips[key] = row["clip_id"]
+    targets = {key: value for key, items in snapshots.items() if (value := views_at(items)) is not None}
+    # A platform where every post has zero views says nothing about which clips are better.
+    silent = {platform for platform in PLATFORMS
+              if not any(value > 0 for (name, _), value in targets.items() if name == platform)}
+    targets = {key: value for key, value in targets.items() if key[0] not in silent}
+    if not targets:
         return [], []
-    marks = ",".join("?" * len(views))
-    rows = db.execute(f"{FEATURE_SQL} WHERE c.id IN ({marks})", list(views)).fetchall()
-    return [features(row) for row in rows], [math.log1p(views[row["id"]]) for row in rows]
+    wanted = sorted({clips[key] for key in targets})
+    found = clip_features(db, wanted)
+    rows, values = [], []
+    for key, value in sorted(targets.items()):
+        if clips[key] in found:
+            rows.append({**found[clips[key]], f"{PLATFORM}{key[0]}": 1.0})
+            values.append(math.log1p(value))
+    return rows, values
 
 
 def fit(rows: list[dict], targets: list[float]) -> Model:

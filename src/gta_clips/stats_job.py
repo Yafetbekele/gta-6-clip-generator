@@ -28,7 +28,7 @@ def run_stats(config: Config, budget_seconds: float = 600) -> str:
         lines.append("No watch-time numbers for: " + ", ".join(sorted(result["no_analytics"])))
     model = train(config)
     lines.append(f"Views model: fitted on {model.posts} posts" if model
-                 else f"Views model: waiting for {MIN_POSTS} posts that are 2+ days old; clips are picked at random")
+                 else f"Views model: waiting for {MIN_POSTS} posts with 24-hour views; clips are picked at random")
     for line in lines:
         logging.info(line)
     return "\n".join(lines)

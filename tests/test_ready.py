@@ -109,8 +109,17 @@ class ExportTest(unittest.TestCase):
             with connect(self.config.paths.database) as db:
                 db.execute("""INSERT INTO post_stats(platform, video_id, fetched, published, views)
                               VALUES ('youtube', ?, ?, ?, ?)""",
-                           (f"vid{index:05d}", fetched, fetched - 5 * 86400, 100 * (index + 1)))
-        self.assertIsNotNone(train(self.config))
+                           (f"vid{index:05d}", fetched, fetched - 25 * 3600, 100 * (index + 1)))
+            # The same clip on TikTok, where nothing gets views, must not teach the model anything.
+            record(self.config, f"https://www.tiktok.com/@gta_clips/video/{7710000000000000000 + index}", clip_id)
+            with connect(self.config.paths.database) as db:
+                db.execute("""INSERT INTO post_stats(platform, video_id, fetched, published, views)
+                              VALUES ('tiktok', ?, ?, ?, 0)""",
+                           (str(7710000000000000000 + index), fetched, fetched - 25 * 3600))
+        model = train(self.config)
+        self.assertIsNotNone(model)
+        self.assertEqual(model.posts, MIN_POSTS + 5)
+        self.assertNotIn("platform=tiktok", model.names)
         self._clip("quiet", messages=10)
         self._clip("loud", messages=150)
         config = replace(self.config, runtime=replace(self.config.runtime, ready_per_day=1))
@@ -148,6 +157,16 @@ class PostTimeTest(unittest.TestCase):
         self.assertAlmostEqual(posted_at("instagram", "Df8zS4RIuk_"), 1795149034.491, places=2)
         self.assertIsNone(posted_at("instagram", "bad code!"))
         self.assertIsNone(posted_at("youtube", "hWMhn5jvMjw"))
+
+
+class ViewsAtTest(unittest.TestCase):
+    def test_views_are_read_at_24_hours(self):
+        from gta_clips.view_model import views_at
+        hour = 3600
+        self.assertEqual(views_at([(20 * hour, 100), (28 * hour, 300)]), 200)
+        self.assertEqual(views_at([(30 * hour, 500)]), 500)  # only a later snapshot, close enough
+        self.assertIsNone(views_at([(40 * hour, 500)]))  # too late to stand in
+        self.assertIsNone(views_at([(10 * hour, 50)]))  # not 24 hours old yet
 
 
 class AudioParseTest(unittest.TestCase):
