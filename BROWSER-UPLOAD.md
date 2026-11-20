@@ -79,6 +79,10 @@ SQLite ledger: `data/browser-upload/posts.sqlite3`. It checks both clip ID and S
 
 The ledger records `held` **before** sending a file. A crash, a CAPTCHA, an unexpected dialog, or an unrecognized success screen leaves it held. That means it may already be a draft or live post. It is never retried automatically. Successful runs record `posted` (or `private`) only after a site confirmation. YouTube saves its video link; TikTok/Instagram may confirm success without exposing a link, so check the profile for it.
 
+YouTube view collection also stores own-channel videos whose links are missing from the ledger. Their clip association remains unknown unless both the complete clip title and exact Twitch VOD timestamp uniquely match a local candidate. A matching **Public** row can recover a held submission without re-uploading it; private videos and drafts cannot. For a recovered upload, the first confirmed public observation is a conservative publication-time bound. Previously stored snapshots and source associations are preserved.
+
+Generated metadata skips very short filler and explicit transcript sentences. Public descriptions use the selected sentence plus streamer credit and the source link; the full transcript stays in the database. This extractive filter does not verify speech recognition or assess whether the video is appropriate to publish. Review the result before approval.
+
 ```powershell
 .\.venv\Scripts\python.exe -m gta_clips.browser_upload status --platform youtube --account gta6-2
 ```

@@ -14,6 +14,19 @@ class Metadata:
 NON_GAME_CATEGORIES = {"just chatting", "irl", "music", "art", "talk shows & podcasts", "asmr",
                        "sports", "travel & outdoors", "food & drink", "pools, hot tubs, and beaches"}
 GAME_THEMES = {"car": "#Cars", "race": "#Racing", "chase": "#Chase", "mission": "#Missions"}
+# Conservative public-copy filter; this is not a content-safety assessment of the video.
+EXPLICIT = re.compile(r"\b(?:fuck\w*|shit\w*|bitch\w*|nigg\w*|cunt\w*|cock|dick|pussy|sex|sexual|rape\w*)\b", re.I)
+FILLERS = {'okay', 'ok', 'yeah', 'yes', 'no', 'hey', 'oh', 'wow', 'man', 'bro', 'guys', 'chat', 'just', 'like', 'well', 'uh', 'um'}
+
+
+def headline_from_transcript(words: str, fallback: str) -> str:
+    """Extract a substantive sentence; never invent an event from uncertain ASR."""
+    for sentence in re.split(r'(?<=[.!?])\s+', words):
+        tokens = re.findall(r"[a-z]+(?:'[a-z]+)?", sentence.casefold())
+        content = [word for word in tokens if word not in FILLERS]
+        if 5 <= len(tokens) <= 24 and len(set(content)) >= 4 and not EXPLICIT.search(sentence):
+            return sentence
+    return fallback
 
 
 def attribution(streamer: str) -> str:
@@ -28,13 +41,13 @@ def _excerpt(text: str, limit: int) -> str:
 
 def generate(transcript: str, game: str, streamer: str, vod_id: str, start: int) -> Metadata:
     words = " ".join(transcript.replace("<", "‹").replace(">", "›").split())
-    sentence = re.split(r"(?<=[.!?])\s+", words, maxsplit=1)[0].strip()
     suffix = f" | @{streamer}"
-    headline = (sentence or f"{game} highlight").replace("<", "‹").replace(">", "›")
+    headline = headline_from_transcript(words, f"{game} highlight")
     title = _excerpt(headline, 100 - len(suffix)) + suffix
     description = f"{attribution(streamer)}\nSource VOD: https://www.twitch.tv/videos/{vod_id}?t={start}s"
-    if words:
-        description = f"{_excerpt(words, 240)}\n\n{description}"
+    # Keep the full transcript in the source database, not in public descriptions.
+    if headline != f"{game} highlight":
+        description = f"{_excerpt(headline, 240)}\n\n{description}"
     category = game.casefold()
     tag = "GTA6" if category == "grand theft auto vi" else re.sub(r"\W", "", game)
     tokens = set(re.findall(r"\w+", words.casefold()))

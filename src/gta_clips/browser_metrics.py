@@ -41,6 +41,7 @@ def collect_rows(page):
         rows = page.locator('ytcp-video-row').evaluate_all('''els => els.map(e => ({
             href:e.querySelector('a#video-title')?.getAttribute('href'),
             title:e.querySelector('a#video-title')?.getAttribute('aria-label'),
+            description:e.querySelector('.description')?.innerText,
             views:e.querySelector('.tablecell-views')?.innerText,
             comments:e.querySelector('.tablecell-comments')?.innerText,
             visibility:e.querySelector('.tablecell-visibility')?.innerText
@@ -59,22 +60,44 @@ def collect_rows(page):
     return results
 
 
-def store_rows(db, account, known, rows, fetched):
+def store_rows(db, account, known, rows, fetched, candidates=(), upload_db=None):
+    from .social_metrics import match_clip
+    db.execute('''CREATE TABLE IF NOT EXISTS post_observations (
+        platform TEXT,video_id TEXT,fetched INTEGER,privacy TEXT,status TEXT,caption TEXT,
+        PRIMARY KEY(platform,video_id,fetched))''')
     saved = 0
     for row in rows:
         remote = video_id(row.get('href'))
-        post = known.get(remote)
+        post = known.get(remote) or {}
         views = exact_count(row.get('views'))
-        # Exact remote IDs only: no guesses from similar or truncated titles.
-        if not post or views is None:
+        if not remote or views is None:
             continue
+        # Own-channel rows are useful even when a manual upload has no ledger URL.
+        # Link a source only with a unique full title AND exact VOD timestamp.
+        clip = match_clip(f"{row.get('title') or ''} {row.get('description') or ''}", candidates)
+        if clip and post.get('clip_id') and post['clip_id'] != clip['id']:
+            clip = None  # An established remote-ID association takes precedence.
+        clip_id = post.get('clip_id') or (clip['id'] if clip else None)
         db.execute('''INSERT INTO posts(platform,video_id,clip_id,account,url,source)
-            VALUES('youtube',?,?,?,?, 'browser-studio') ON CONFLICT(platform,video_id) DO NOTHING''',
-                   (remote, post.get('clip_id'), account, 'https://youtube.com/shorts/' + remote))
+            VALUES('youtube',?,?,?,?, 'browser-studio') ON CONFLICT(platform,video_id)
+            DO UPDATE SET clip_id=COALESCE(posts.clip_id,excluded.clip_id)''',
+                   (remote, clip_id, account, 'https://youtube.com/shorts/' + remote))
         inserted = db.execute('''INSERT OR IGNORE INTO post_stats(platform,video_id,fetched,published,views,comments)
             VALUES('youtube',?,?,?,?,?)''',
                    (remote, int(fetched), post.get('published'), views, exact_count(row.get('comments'))))
         saved += inserted.rowcount
+        db.execute('INSERT OR IGNORE INTO post_observations VALUES(?,?,?,?,?,?)',
+                   ('youtube', remote, int(fetched), row.get('visibility'), 'Listed in Studio', row.get('description')))
+        if upload_db is not None and clip and row.get('visibility', '').strip().casefold() == 'public':
+            # A public matching video proves submission; a draft or similar title does not.
+            # First confirmed public observation is a conservative publication-time bound.
+            with upload_db:
+                upload_db.execute('''UPDATE posts SET state='posted',url=?,
+                    finished=CASE WHEN state IN ('posted','under_review') THEN finished ELSE ? END,
+                    detail=CASE WHEN state IN ('posted','under_review') THEN detail
+                        ELSE 'Recovered from public Studio row; exact title and source timestamp matched' END
+                    WHERE platform='youtube' AND account=? AND clip_id=? AND state IN ('held','posted','under_review')''',
+                    ('https://youtube.com/shorts/' + remote, fetched, account, clip_id))
     return saved
 
 
@@ -138,8 +161,6 @@ def collect(settings, force=False, only_account=None, only_platform=None):
                             remote = video_id(row['url'])
                             if remote:
                                 known[remote] = {'clip_id': row['clip_id'], 'published': row['finished']}
-                    if platform == 'youtube' and not known:
-                        continue
                     success = False
                     stage = 'open browser'
                     try:
@@ -167,7 +188,7 @@ def collect(settings, force=False, only_account=None, only_platform=None):
                                         pass
                                     raise
                                 with db:
-                                    count = (store_rows(db, account, known, rows, time.time()) if platform == 'youtube'
+                                    count = (store_rows(db, account, known, rows, time.time(), candidates, upload_db) if platform == 'youtube'
                                              else store_social(db, upload_db, account, platform, rows, candidates, time.time()))
                                 success = count > 0
                                 detail = f'Saved {count} {platform} view snapshots'
