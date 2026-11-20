@@ -1,8 +1,11 @@
 """Local hourly browser posting: no AI calls and no catch-up bursts."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import hashlib
 import json
 import logging
+import math
 import subprocess
 import sys
 import time
@@ -10,6 +13,19 @@ from pathlib import Path
 
 from .browser_upload import PLATFORMS, exists, ledger, scan, settings, account_block
 from .db import worker_lock
+
+
+def posting_spacing(account, platform, target, last_started):
+    """Stable per-attempt delay: polling/restarts never redraw the due time."""
+    base = max(3600, float(target.get('spacing_minutes', 0)) * 60)
+    variation = float(target.get('schedule_jitter_minutes', 0))
+    if not math.isfinite(variation) or not 0 <= variation <= 120:
+        raise ValueError('schedule_jitter_minutes must be between 0 and 120')
+    if not variation:
+        return base
+    seed = f'{account}/{platform}/{float(last_started).hex()}'.encode()
+    offset = int.from_bytes(hashlib.sha256(seed).digest()[:8], 'big') % (int(variation * 60) + 1)
+    return base + offset
 
 
 def readiness(db, account, platform, target, now):
@@ -23,8 +39,12 @@ def readiness(db, account, platform, target, now):
     # Held clips remain excluded by the upload ledger, but do not stop this account.
     if not any(r['state'] in ('posted', 'under_review') for r in rows):
         return 'needs successful test upload'
-    spacing = max(3600, float(target.get('spacing_minutes', 0)) * 60)
-    if rows and now - max(r['started'] for r in rows) < spacing:
+    latest = max(r['started'] for r in rows)
+    spacing = posting_spacing(account, platform, target, latest)
+    if now - latest < spacing:
+        if float(target.get('schedule_jitter_minutes', 0)) > 0:
+            due = datetime.fromtimestamp(latest + spacing).strftime('%H:%M')
+            return f'waiting for varied interval (next eligible {due})'
         return 'waiting for hourly interval' if spacing == 3600 else f'waiting for {spacing / 60:g}-minute interval'
     return 'ready'
 

@@ -6,17 +6,20 @@
       "youtube": {
         "channel_id": "UCo4YeM9cG8C5aWuhUyFOujw",
         "daily_limit": null,
-        "spacing_minutes": 0
+        "spacing_minutes": 0,
+        "schedule_jitter_minutes": 0
       },
       "tiktok": {
         "handle": "gta_clips2qw",
         "daily_limit": null,
-        "spacing_minutes": 0
+        "spacing_minutes": 0,
+        "schedule_jitter_minutes": 0
       },
       "instagram": {
         "handle": "gta_6_clip2",
         "daily_limit": null,
-        "spacing_minutes": 0
+        "spacing_minutes": 0,
+        "schedule_jitter_minutes": 0
       }
     }
   }

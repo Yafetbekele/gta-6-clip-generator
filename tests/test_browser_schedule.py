@@ -4,10 +4,33 @@ import threading
 from unittest.mock import patch
 from test_browser_upload import BrowserUploadTests
 from gta_clips.browser_upload import scan, claim, finish, Clip, exists
-from gta_clips.browser_schedule import readiness, tick
+from gta_clips.browser_schedule import readiness, tick, posting_spacing
 
 
 class ScheduleTests(BrowserUploadTests):
+    def test_variation_stays_fixed_until_next_attempt_and_is_account_specific(self):
+        target = {'auto_post': True, 'spacing_minutes': 144, 'schedule_jitter_minutes': 30}
+        delay = posting_spacing('test', 'youtube', target, 10000)
+        self.assertTrue(144 * 60 <= delay <= 174 * 60)
+        self.assertEqual(delay, posting_spacing('test', 'youtube', target, 10000))
+        offsets = {posting_spacing(a, p, target, start) for a in ('first', 'second')
+                   for p in ('youtube', 'tiktok', 'instagram') for start in (10000, 20000)}
+        self.assertGreater(len(offsets), 1)
+        clip, = scan(self.root, 'test')
+        claim(self.db, 'youtube', 'test', clip)
+        finish(self.db, 'youtube', 'test', clip, 'posted')
+        self.db.execute('update posts set started=10000')
+        self.db.commit()
+        self.assertIn('next eligible', readiness(self.db, 'test', 'youtube', target, 10000 + delay - 1))
+        self.assertEqual(readiness(self.db, 'test', 'youtube', target, 10000 + delay), 'ready')
+
+    def test_variation_never_shortens_minimum_and_rejects_invalid_config(self):
+        for start in range(20):
+            self.assertGreaterEqual(posting_spacing('a', 'youtube', {'schedule_jitter_minutes': 30}, start), 3600)
+        for invalid in (-1, 121, float('nan'), float('inf')):
+            with self.assertRaises(ValueError):
+                posting_spacing('a', 'youtube', {'schedule_jitter_minutes': invalid}, 10000)
+
     def test_configured_longer_posting_interval(self):
         clip, = scan(self.root, 'test')
         claim(self.db, 'youtube', 'test', clip)
