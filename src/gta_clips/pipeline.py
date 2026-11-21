@@ -12,6 +12,7 @@ from .diagnostics import describe
 from .discovery import Twitch, Vod
 from .download import VodUnavailable, download_vod, replay_chat
 from .editing import max_source_height, probe_duration, render
+from . import filler as fillers
 from . import hook_styles
 from .highlights import audio_levels, rank_moments, video_activity
 from .metadata import generate
@@ -49,17 +50,19 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
             relative = Path("clips") / f"{clip_id}.mp4"
             details = {}
             hook_style = hook_styles.choose(clip_id, config.editing.test_hooks)
+            filler_kind = fillers.choose(clip_id, config.editing.filler, base)
             transcript = render(source, clip_dir, base / relative, moment, vod.streamer,
                                 config.editing, transcriber, details, topic=config.twitch.game_name,
-                                hook_key=clip_id, hook_style=hook_style or hook_styles.STANDARD)
+                                hook_key=clip_id, hook_style=hook_style or hook_styles.STANDARD,
+                                filler=fillers.pick(clip_id, filler_kind, base, moment.duration))
             metadata = generate(transcript, config.twitch.game_name, vod.streamer, vod.id, moment.start)
             # Save each clip as soon as it exists, so a later failure does not discard it.
             with connect(config.paths.database) as db:
                 db.execute(INSERT_CLIP, (clip_id, vod.id, vod.streamer, relative.as_posix(), moment.start,
                                          moment.duration, transcript, metadata.title, metadata.description,
                                          metadata.hashtags))
-                db.execute("UPDATE clips SET hook_style=?, hook_method=? WHERE id=?",
-                           (hook_style, details.get("hook_method"), clip_id))
+                db.execute("UPDATE clips SET hook_style=?, hook_method=?, filler=? WHERE id=?",
+                           (hook_style, details.get("hook_method"), filler_kind, clip_id))
                 db.execute(
                     """INSERT OR REPLACE INTO clip_features(clip_id, source, chat_score, audio_score,
                            twitch_clip_score, motion_seconds, total_score, speech_seconds, word_count,

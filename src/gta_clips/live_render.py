@@ -22,6 +22,7 @@ from .diagnostics import describe
 from .discovery import Twitch, _duration, _timestamp
 from .download import VodUnavailable, download_vod
 from .editing import max_source_height, render
+from . import filler as fillers
 from . import hook_styles
 from .highlights import Moment
 from .metadata import generate
@@ -142,6 +143,7 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
     staging.mkdir(parents=True, exist_ok=True)
     cut_before, cut_after = _cut(config, burst)
     hook_style = hook_styles.choose(clip_id, config.editing.test_hooks)
+    filler_kind = fillers.choose(clip_id, config.editing.filler, config.paths.data_dir)
     length = cut_before + cut_after
     before = min(PAD, start)
     section = (start - before, min(vod_duration, start + length + PAD))
@@ -157,16 +159,18 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
                             Moment(before, length, burst["messages"]), burst["streamer"],
                             config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id,
                             language=(account.language if account else "") or "en",
-                            hook_style=hook_style or hook_styles.STANDARD)
+                            hook_style=hook_style or hook_styles.STANDARD,
+                            filler=fillers.pick(clip_id, filler_kind, config.paths.data_dir, length))
         metadata = generate(transcript, burst["game_name"], burst["streamer"], vod_id, start)
         with connect(config.paths.database) as db:
             db.execute("INSERT OR IGNORE INTO vods(id, streamer, status) VALUES (?, ?, 'live-window')",
                        (vod_id, burst["streamer"]))
             db.execute(INSERT_CLIP, (clip_id, vod_id, burst["streamer"], relative.as_posix(), start,
                                     length, transcript, metadata.title, metadata.description, metadata.hashtags))
-            db.execute("UPDATE clips SET account=?, cut_before=?, cut_after=?, hook_style=?, hook_method=? WHERE id=?",
+            db.execute("""UPDATE clips SET account=?, cut_before=?, cut_after=?, hook_style=?, hook_method=?,
+                              filler=? WHERE id=?""",
                        (account.name if account else None, cut_before, cut_after, hook_style,
-                        details.get("hook_method"), clip_id))
+                        details.get("hook_method"), filler_kind, clip_id))
             db.execute(
                 """INSERT OR REPLACE INTO clip_features(clip_id, source, speech_seconds, word_count,
                        language, language_probability, first_word_s, last_word_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",

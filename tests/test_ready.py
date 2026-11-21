@@ -210,3 +210,38 @@ class AudioParseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstagramQueueTest(ExportTest):
+    """Ready picks count as Instagram approval for accounts that post there by API."""
+
+    def _config(self, limit=3):
+        schedule = dict(self.config.schedule)
+        schedule["instagram"] = replace(schedule["instagram"], daily_limit=limit)
+        return replace(self.config, schedule=schedule,
+                       runtime=replace(self.config.runtime, ready_per_day=10))
+
+    def _uploads(self):
+        with connect(self.config.paths.database) as db:
+            return [tuple(row) for row in db.execute(
+                "SELECT u.clip_id, c.state FROM uploads u JOIN clips c ON c.id = u.clip_id WHERE u.platform='instagram'")]
+
+    def test_one_waiting_clip_per_api_account(self):
+        for name in ("a", "b"):
+            self._clip(name, account="irl-en")
+        self._clip("gta", account="gta6-1")
+        with connect(self.config.paths.database) as db:
+            db.execute("INSERT INTO oauth(platform, token) VALUES ('instagram@irl-en', '{}')")
+        export_due(self._config(), self.now)
+        uploads = self._uploads()
+        # Only irl-en has an API login, and only one of its clips waits at a time.
+        self.assertEqual(len(uploads), 1)
+        self.assertIn(uploads[0][0], ("a", "b"))
+        self.assertEqual(uploads[0][1], "approved")
+
+    def test_nothing_queued_when_instagram_is_off(self):
+        self._clip("a", account="irl-en")
+        with connect(self.config.paths.database) as db:
+            db.execute("INSERT INTO oauth(platform, token) VALUES ('instagram@irl-en', '{}')")
+        export_due(self._config(limit=0), self.now)
+        self.assertEqual(self._uploads(), [])

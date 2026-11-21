@@ -70,6 +70,8 @@ class EditingConfig:
     renderer: str = "ffmpeg"
     # Give each clip a random kind of hook box (see hook_styles.py) instead of the usual one.
     test_hooks: bool = False
+    # Background gameplay under the stream (see filler.py): "off", "test" (random kind or none) or "on".
+    filler: str = "off"
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,10 @@ class RuntimeConfig:
     publish_every_minutes: int = 0
     ready_every_minutes: int = 30
     ready_per_day: int = 6
+    # Days a ready-to-post day folder is kept.
+    ready_keep_days: int = 7
+    # Newest clip videos kept per account set; older ones are deleted. 0 keeps everything.
+    max_clips_per_account: int = 0
     # Measures clips, reads post views and refits the views model.
     stats_every_minutes: int = 60
 
@@ -344,8 +350,14 @@ def _editing(raw: object) -> EditingConfig:
         raise ConfigError("editing.renderer must be 'ffmpeg' or 'remotion'")
     if renderer == "remotion" and layout != "fit":
         raise ConfigError("The Remotion renderer currently requires editing.layout = 'fit'")
+    filler = options.get("filler", "off")
+    if filler not in ("off", "test", "on"):
+        raise ConfigError("editing.filler must be 'off', 'test' or 'on'")
+    if filler != "off" and renderer == "remotion":
+        raise ConfigError("editing.filler needs editing.renderer = 'ffmpeg'")
     return EditingConfig(layout, _text(options.get("whisper_model", "base"), "editing.whisper_model"), layouts, renderer,
-                         test_hooks=_boolean(options.get("test_hooks", False), "editing.test_hooks"))
+                         test_hooks=_boolean(options.get("test_hooks", False), "editing.test_hooks"),
+                         filler=filler)
 
 
 def _schedule(raw: object) -> dict[str, ScheduleConfig]:
@@ -473,6 +485,10 @@ def _runtime(raw: object) -> RuntimeConfig:
         ready_every_minutes=_interval(options.get("ready_every_minutes", defaults.ready_every_minutes),
                                       "runtime.ready_every_minutes"),
         ready_per_day=_integer(options.get("ready_per_day", defaults.ready_per_day), "runtime.ready_per_day", 0, 50),
+        ready_keep_days=_integer(options.get("ready_keep_days", defaults.ready_keep_days),
+                                 "runtime.ready_keep_days", 1, 365),
+        max_clips_per_account=_integer(options.get("max_clips_per_account", defaults.max_clips_per_account),
+                                       "runtime.max_clips_per_account", 0, 100000),
         stats_every_minutes=_interval(options.get("stats_every_minutes", defaults.stats_every_minutes),
                                       "runtime.stats_every_minutes"),
     )

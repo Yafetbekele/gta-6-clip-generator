@@ -67,6 +67,7 @@ renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Re
 layout = "fit"
 whisper_model = "base"
 # test_hooks = true # Give each clip a random kind of hook box to compare their views (see hook_styles.py).
+# filler = "test" # Background gameplay under the stream: "off", "test" (random kind or none per clip) or "on".
 
 # To enable a split layout for a channel, replace "streamer_login" and
 # adjust [x, y, width, height] as fractions of its source video frame.

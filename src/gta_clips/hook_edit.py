@@ -10,6 +10,7 @@ from .context_text import debate_hook, manual_hook
 from .db import connect, worker_lock
 from .download import download_vod
 from .editing import render
+from .filler import pick
 from .highlights import Moment
 from .review import get_clip
 
@@ -50,7 +51,8 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
             render(source, work, target, Moment(padding, duration, 0), clip['streamer'],
                    replace(config.editing, layout='fit'),
                    Transcriber(config.editing.whisper_model), details, hook_text=text, topic=topic,
-                   hook_key=clip_id, language=language, hook_style=style)
+                   hook_key=clip_id, language=language, hook_style=style,
+                   filler=pick(clip_id, clip.get('filler'), base, duration))
             with connect(config.paths.database) as db:
                 updated = db.execute("""UPDATE clips SET path=?, hook_method=? WHERE id=? AND path=? AND state='pending'
                     AND NOT EXISTS (SELECT 1 FROM uploads WHERE clip_id=clips.id)""",

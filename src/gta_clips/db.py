@@ -184,6 +184,9 @@ MIGRATIONS = [
     # What YouTube did to each post when it was read: age-restricted (1/0), and how many countries a
     # claim blocks it in. Empty for snapshots from before this was read, and for other platforms.
     ((("post_stats", "age_restricted", "INTEGER"), ("post_stats", "blocked_countries", "INTEGER")), ""),
+    # The background gameplay the filler test gave a clip (see filler.py): a kind such as
+    # subway_surfers, "none" for a test clip left without, or empty when the test was off.
+    ((("clips", "filler", "TEXT"),), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

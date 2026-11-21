@@ -76,6 +76,9 @@ class ChatRateTest(unittest.TestCase):
         settings = LiveConfig(warmup_seconds=0, messages_per_10_seconds=0, spike_multiplier=4.0,
                               min_unique_chatters=6)
         self.assertEqual(required_unique(settings), 6)
+        # Smaller channels than live.min_viewers need fewer chatters: one per 50 viewers, at least 6.
+        busy = LiveConfig(min_viewers=1000, min_unique_chatters=20)
+        self.assertEqual([required_unique(busy, viewers) for viewers in (0, 5000, 1000, 600, 200)], [20, 20, 20, 12, 6])
         rate = ChatRate()
         # A quiet chat: one message every 5 seconds for 5 minutes is 2 per 10 s.
         for index in range(60):

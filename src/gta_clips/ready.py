@@ -120,10 +120,51 @@ def export_due(config: Config, now: float | None = None, rng: random.Random | No
                 db.execute("INSERT INTO ready_exports(clip_id, account, day, path, predicted) VALUES (?, ?, ?, ?, ?)",
                            (clip["id"], account.name, day, target.relative_to(base).as_posix(),
                             predicted.get(clip["id"])))
+                queue_instagram(config, db, account.name, clip["id"])
             logging.info("Ready to post on %s: %s", account.name, target.name)
             added.append(target)
             wanted -= 1
     return added
+
+
+def queue_instagram(config: Config, db, account: str, clip_id: str) -> bool:
+    """Approve a clip the ready step just picked for Instagram, if ``account`` posts there by API.
+
+    The ready step's pick stands in for a manual approval (the browser uploader posts the same
+    clips to YouTube). Only one clip waits per account at a time, so a daily limit lower than
+    ready_per_day posts the newest picks instead of building a backlog of stale ones.
+    """
+    if config.schedule["instagram"].daily_limit <= 0:
+        return False
+    if not db.execute("SELECT 1 FROM oauth WHERE platform=?", (f"instagram@{account}",)).fetchone():
+        return False
+    waiting = db.execute("""SELECT 1 FROM uploads u JOIN clips c ON c.id = u.clip_id
+                            WHERE u.platform='instagram' AND u.state='queued' AND c.account=?""",
+                         (account,)).fetchone()
+    if waiting:
+        return False
+    clip = db.execute("SELECT state, title, description, hashtags FROM clips WHERE id=?", (clip_id,)).fetchone()
+    if clip is None or clip["state"] != "pending":
+        return False
+    # Instagram's caption limit, as review.decide checks for manual approvals.
+    if len(f'{clip["title"]}\n\n{clip["description"]}\n\n{clip["hashtags"]}') > 2200:
+        return False
+    db.execute("UPDATE clips SET state='approved' WHERE id=?", (clip_id,))
+    db.execute("INSERT OR IGNORE INTO uploads(clip_id, platform, checkpoint) VALUES (?, 'instagram', '{}')",
+               (clip_id,))
+    logging.info("Queued %s for Instagram on %s", clip_id, account)
+    return True
+
+
+def queue_ready_for_instagram(config: Config) -> int:
+    """Queue the newest of today's ready clips for each API Instagram account with nothing waiting."""
+    queued = 0
+    with connect(config.paths.database) as db:
+        rows = db.execute("""SELECT clip_id, account FROM ready_exports WHERE day=?
+                             ORDER BY rowid DESC""", (datetime.now().strftime("%Y-%m-%d"),)).fetchall()
+        for row in rows:
+            queued += queue_instagram(config, db, row["account"], row["clip_id"])
+    return queued
 
 
 def rewrite_notes(config: Config):

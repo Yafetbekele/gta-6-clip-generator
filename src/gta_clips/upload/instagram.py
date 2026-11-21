@@ -5,10 +5,51 @@ create a REELS container with upload_type=resumable, POST the file to the ruploa
 wait for the container to finish processing, then publish it.
 """
 
+from pathlib import Path
+
+from ..diagnostics import run
+from ..download import ffmpeg_binary
 from ..oauth import INSTAGRAM_GRAPH, env, instagram_version
 from .common import Result, Upload, UploadError, check, request, safe_code, verify_url
 
 MAX_BYTES = 300 * 1024 * 1024  # Meta's Reel file size limit
+# Since 2026-11-21 Meta has refused to process our longer Reels, so longer clips are cut to this.
+MAX_SECONDS = 30
+# Of the cut, this much comes before the chat burst that triggered a live clip.
+BEFORE_BURST = 20
+
+
+def window(duration: float, burst_at: float | None) -> tuple[float, float] | None:
+    """(start, length) of the part of a clip to post, or None to post all of it.
+
+    A live clip's burst sits ``cut_before`` seconds in; keep the run-up and the reaction around it.
+    Other clips keep their opening, where their scored moment begins.
+    """
+    if duration <= MAX_SECONDS + 0.5:
+        return None
+    start = 0.0 if burst_at is None else burst_at - BEFORE_BURST
+    return max(0.0, min(start, duration - MAX_SECONDS)), float(MAX_SECONDS)
+
+
+def prepare(job, path: Path, work: Path) -> Path:
+    """The file to upload for ``job``: the clip itself, or a cached 30-second cut of it."""
+    duration = float(job["duration"] or 0)
+    keys = job.keys()
+    burst_at = job["cut_before"] if "cut_before" in keys and job["cut_before"] is not None else None
+    cut = window(duration, burst_at)
+    if cut is None:
+        return path
+    target = work / f"{job['id']}-{MAX_SECONDS}s.mp4"
+    if target.is_file() and target.stat().st_size:
+        return target
+    work.mkdir(parents=True, exist_ok=True)
+    partial = target.with_suffix(".part.mp4")
+    # Re-encoding cuts on the exact frame; the clip is short, so it only takes seconds.
+    run([ffmpeg_binary(), "-hide_banner", "-loglevel", "error", "-y", "-ss", str(cut[0]), "-i", str(path),
+         "-t", str(cut[1]), "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(partial)], timeout=300, low_priority=True)
+    partial.replace(target)
+    return target
 
 
 def _upload_file(upload: Upload, uri: str):
@@ -20,6 +61,12 @@ def _upload_file(upload: Upload, uri: str):
         response = request("POST", uri, data=body, headers={
             "Authorization": f"OAuth {upload.token}", "offset": "0", "file_size": str(size),
         })
+    if response.status_code == 400 and "ProcessingFailedError" in response.text:
+        # Meta refused the finished file. On 2026-11-21 this hit every clip over ~30 s for a while,
+        # then the same files went through, so try again later in a fresh container.
+        upload.save(container=None, upload_uri=None, uploaded=False)
+        raise UploadError("Instagram could not process the video (ProcessingFailedError); retrying later",
+                          retry=True, delay=3600)
     check(response, 200, 201)
     try:
         accepted = response.json().get("success") is True

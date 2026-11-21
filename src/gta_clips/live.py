@@ -37,6 +37,13 @@ RATE_RETENTION = 600
 RANK_SLACK = 5
 MIN_DWELL_SECONDS = 600
 CANDIDATE_EXTRA = 10
+# A feed with fewer channels above live.min_viewers than its quota fills the rest with smaller
+# streams down to this size, so small categories and languages still produce clips.
+FILL_MIN_VIEWERS = 150
+# Smaller channels need fewer different chatters for a burst: one per this many viewers, at least
+# MIN_SMALL_UNIQUE, never more than live.min_unique_chatters.
+VIEWERS_PER_CHATTER = 50
+MIN_SMALL_UNIQUE = 6
 PEAK_SECONDS = 30
 # Frames buffered by the socket's reader thread, so Twitch's pings are answered during HTTP work.
 RECEIVE_QUEUE = 10_000
@@ -92,6 +99,8 @@ class ChatRate:
     next_control: float | None = None
     next_near_miss: float = 0
     _anonymous: int = 0
+    # The channel's viewer count, which scales the chatter rule (see required_unique).
+    viewers: int = 0
 
     def start_coverage(self, now: float):
         """The channel's subscription is active. Time since the last pause becomes a gap."""
@@ -151,7 +160,7 @@ class ChatRate:
         if not self.warm(config):
             return 0
         threshold = max(config.messages_per_10_seconds, self.baseline * config.spike_multiplier)
-        return count if count >= threshold and unique >= required_unique(config) else 0
+        return count if count >= threshold and unique >= required_unique(config, self.viewers) else 0
 
     def finished_peaks(self) -> list[Peak]:
         done = [peak for peak in self.peaks if self.latest > peak.until]
@@ -166,11 +175,15 @@ class ChatRate:
         return len(self.history) * 10 / seconds
 
 
-def required_unique(config: LiveConfig) -> int:
+def required_unique(config: LiveConfig, viewers: int = 0) -> int:
+    needed = config.min_unique_chatters
+    # Channels below live.min_viewers (filled in for short feeds) can't draw as big a crowd.
+    if viewers and viewers < config.min_viewers:
+        needed = min(needed, max(MIN_SMALL_UNIQUE, viewers // VIEWERS_PER_CHATTER))
     # With a message floor set, the chatter rule cannot ask for more people than messages.
     if config.messages_per_10_seconds:
-        return min(config.min_unique_chatters, config.messages_per_10_seconds)
-    return config.min_unique_chatters
+        return min(needed, config.messages_per_10_seconds)
+    return needed
 
 
 class ChatBuckets:
@@ -304,10 +317,14 @@ def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | No
             })["data"])
         rows.sort(key=lambda row: row["viewer_count"], reverse=True)
     active = []
+    # Rows come most viewers first. Streams below min_viewers only fill a feed's unused quota.
+    quota = feed.channels if feed else config.live.max_channels
+    big = sum(1 for row in rows if int(row.get("viewer_count") or 0) >= config.live.min_viewers)
+    floor = config.live.min_viewers if big >= quota else min(config.live.min_viewers, FILL_MIN_VIEWERS)
     for row in rows:
         if (row["game_id"] == game_id and row["type"] == "live" and row["id"].isdecimal()
                 and (not language or row.get("language") == language)
-                and int(row.get("viewer_count") or 0) >= config.live.min_viewers):
+                and int(row.get("viewer_count") or 0) >= floor):
             active.append(Broadcast(row["id"], row["user_id"], row["user_login"],
                                     _timestamp(row["started_at"]).timestamp(),
                                     int(row.get("viewer_count") or 0), len(active) + 1,
@@ -521,6 +538,7 @@ def _chat_event(config: Config, packet: dict, desired: dict[str, Broadcast],
         bits = int((event.get("cheer") or {}).get("bits") or 0)
         buckets.add(stream.stream_id, timestamp, chatter, emotes, bits)
     rate = rates.setdefault(stream.stream_id, ChatRate())
+    rate.viewers = stream.viewer_count
     count = rate.observe(timestamp, live, chatter)
     for peak in rate.finished_peaks():
         _save_peak(config, stream.stream_id, peak)
@@ -556,7 +574,7 @@ def _sample_comparisons(config: Config, stream: Broadcast, rate: ChatRate, times
             logging.info("Near-miss window at %s (%s messages in 10s)", stream.login, candidate.messages)
     elif (live.near_miss_interval_seconds and rate.near_miss is None and timestamp >= rate.next_near_miss
           and count >= max(live.messages_per_10_seconds, rate.baseline * live.near_miss_multiplier)
-          and unique >= required_unique(live)):
+          and unique >= required_unique(live, stream.viewer_count)):
         rate.near_miss = Peak(int(timestamp), timestamp + PEAK_SECONDS, count, unique, timestamp)
     if not live.control_interval_seconds:
         return

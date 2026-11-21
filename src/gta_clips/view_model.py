@@ -37,7 +37,7 @@ MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
 
 FEATURE_SQL = """
-SELECT c.id, c.duration, c.cut_before, c.cut_after, c.hook_style, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
+SELECT c.id, c.duration, c.cut_before, c.cut_after, c.hook_style, c.filler, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
        b.messages, f.baseline_per_10s, f.unique_chatters, f.peak_messages, f.peak_unique_chatters,
        f.peak_offset_s, f.viewer_count, f.viewer_rank, f.stream_age_s, f.is_mature,
        cf.speech_seconds, cf.word_count, cf.language_probability, cf.first_word_s, cf.last_word_s,
@@ -78,6 +78,9 @@ def features(row) -> dict[str, float | None]:
     # The hook style the hook test gave the clip (see hook_styles.py); none when the test was off.
     if row["hook_style"]:
         values[f"hook={row['hook_style']}"] = 1.0
+    # The background gameplay the filler test gave the clip (see filler.py), including "none".
+    if row["filler"]:
+        values[f"filler={row['filler']}"] = 1.0
     if row["game"]:
         values[f"category={row['game']}"] = 1.0
     # Some accounts reach far more people than others; this keeps that from counting as clip quality.
@@ -287,6 +290,23 @@ def hook_results(db) -> dict:
             for platform, labels in sorted(groups.items())}
 
 
+def filler_results(db) -> dict:
+    """Median views at TARGET_AGE per platform for each filler kind tried, including "none".
+
+    Kinds are chosen at random (see filler.py); with fewer than about 30 posts a median is mostly luck.
+    """
+    views, clips, _ = targets(db)
+    kinds = dict(db.execute("SELECT id, filler FROM clips WHERE filler IS NOT NULL"))
+    groups: dict[str, dict[str, list[float]]] = {}
+    for key, value in views.items():
+        kind = kinds.get(clips[key])
+        if kind is not None:
+            groups.setdefault(key[0], {}).setdefault(kind, []).append(value)
+    return {platform: {kind: {"posts": len(found), "median_views": round(float(np.median(found)))}
+                       for kind, found in sorted(labels.items())}
+            for platform, labels in sorted(groups.items())}
+
+
 def restriction_results(db) -> dict:
     """YouTube posts per streamer, and how many YouTube last reported as age-restricted or region-blocked.
 
@@ -315,6 +335,7 @@ def train(config: Config, now: float | None = None) -> Model | None:
         rows, values = training_rows(db, now)
         checked = check(db)
         report = {"predictions_checked": checked, "cut_test": cut_results(db), "hook_test": hook_results(db),
+                  "filler_test": filler_results(db),
                   "youtube_restrictions": restriction_results(db),
                   "test_note": "Each group needs about 30 posts before its median means much."}
     path = config.paths.data_dir / SUMMARY

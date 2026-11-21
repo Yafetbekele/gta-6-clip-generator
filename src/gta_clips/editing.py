@@ -12,6 +12,7 @@ from .config import EditingConfig, Crop
 from .context_text import debate_hook, manual_hook
 from .diagnostics import CommandFailed, run
 from .download import ffmpeg_binary
+from .filler import Filler, STREAM_TOP
 from .highlights import Moment
 
 
@@ -62,17 +63,34 @@ def _video_top(source: Path) -> int:
     return int((1920 - scaled) // 2)
 
 
+WIDTH = 1080
+# With filler the stream fits a 1080 x 608 box (a full 16:9 frame) starting at STREAM_TOP.
+FILLER_STREAM_HEIGHT = 608
+
+
+def _stream_box(source: Path) -> tuple[int, int]:
+    """Height of the stream inside the filler layout's box, and the row where the filler starts."""
+    with av.open(str(source)) as media:
+        stream = media.streams.video[0]
+        width, height = stream.width, stream.height
+    scaled = FILLER_STREAM_HEIGHT if not width or not height else min(FILLER_STREAM_HEIGHT, WIDTH * height / width)
+    box = int(scaled) // 2 * 2
+    return box, (STREAM_TOP + (FILLER_STREAM_HEIGHT + box) // 2) // 2 * 2
+
+
 def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
     settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
     *, hook_text: str | None = None, topic: str = "", hook_key: str = "", language: str = "en",
-    hook_style: str = "quote",
+    hook_style: str = "quote", filler: Filler | None = None,
 ) -> str:
     """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts.
 
     Without ``hook_text`` a debate prompt is generated from the speech and ``topic``
     (the Twitch category) in ``hook_style`` (see context_text.debate_hook); ``hook_text=""``
     renders no headline. ``details["hook_method"]`` says which kind of hook was shown.
+    With ``filler`` (see filler.py) the whole stream sits near the top and the muted filler video
+    fills the bottom; only the FFmpeg renderer supports it.
     """
     ffmpeg = ffmpeg_binary()
     audio = working / "speech.wav"
@@ -96,17 +114,38 @@ def render(
     hook = (debate_hook(" ".join(w.text for w in words), topic, hook_key or streamer, quote=matches,
                         language=language, style=hook_style)
             if hook_text is None else manual_hook(hook_text))
+    if filler is not None and settings.renderer == "remotion":
+        logging.warning("The Remotion renderer does not support filler; rendering %s without it", target.name)
+        filler = None
     if settings.renderer == "remotion":
         from .remotion_render import render_polished
         temporary = working / "rendered.mp4"
         render_polished(source, working, temporary, moment, streamer, words, ffmpeg, hook=hook)
     else:
-        hook_bottom = _video_top(source) - 30 if settings.layout == "fit" else None
-        write_ass(working / "captions.ass", words, streamer, moment.duration, hook,
-                  hook_bottom if hook_bottom and hook_bottom >= 420 else None)
+        extra_inputs = []
+        if filler is not None:
+            box, seam = _stream_box(source)
+            hook_bottom = STREAM_TOP + (FILLER_STREAM_HEIGHT - box) // 2 - 30
+            # Captions straddle the seam between the stream and the filler.
+            write_ass(working / "captions.ass", words, streamer, moment.duration, hook, hook_bottom,
+                      caption_margin=1920 - seam - 130)
+        else:
+            hook_bottom = _video_top(source) - 30 if settings.layout == "fit" else None
+            write_ass(working / "captions.ass", words, streamer, moment.duration, hook,
+                      hook_bottom if hook_bottom and hook_bottom >= 420 else None)
         split = settings.streamers.get(streamer) if settings.layout == "split" else None
         # Dropping to 30 fps first halves the scaling work for 60 fps sources.
-        if split:
+        if filler is not None:
+            # The filler loops if it is short, and is shifted to begin with the clip window,
+            # which the output-side -ss below cuts from both inputs alike.
+            extra_inputs = ["-stream_loop", "-1", "-ss", str(filler.offset), "-t", str(moment.duration + 2),
+                            "-itsoffset", str(moment.start), "-i", str(filler.path)]
+            layout = (f"[0:v]fps=30,scale={WIDTH}:{FILLER_STREAM_HEIGHT}:force_original_aspect_ratio=decrease:"
+                      f"force_divisible_by=2,pad={WIDTH}:1920:(ow-iw)/2:{STREAM_TOP}+({FILLER_STREAM_HEIGHT}-ih)/2:"
+                      f"color=black,setsar=1[top];"
+                      f"[1:v]fps=30,{_fill(1920 - seam)}[bottom];"
+                      f"[top][bottom]overlay=0:{seam}:eof_action=repeat")
+        elif split:
             layout = (f"[0:v]fps=30,split[face_src][game_src];"
                       f"[face_src]{_crop(split.facecam)}{_fill(720)}[face];"
                       f"[game_src]{_crop(split.gameplay)}{_fill(1200)}[game];[face][game]vstack")
@@ -118,8 +157,8 @@ def render(
             layout = f"[0:v]fps=30,{_fill(1920)}"
         filters = f"{layout},ass=captions.ass[video]"
         temporary = working / "rendered.mp4"
-        run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *input_args,
-             "-filter_complex_threads", "2", "-filter_complex", filters, "-map", "[video]",
+        run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), *extra_inputs,
+             *input_args[2:], "-filter_complex_threads", "2", "-filter_complex", filters, "-map", "[video]",
              "-map", "0:a:0?", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
              str(temporary)],
@@ -138,6 +177,8 @@ def render(
     else:
         manifest = {"schema_version": 1, "renderer": "ffmpeg", "streamer": streamer,
                     "durationSeconds": moment.duration, "hook": hook.to_dict()}
+        if filler is not None:
+            manifest["filler"] = {"kind": filler.kind, "file": filler.path.name, "offset": filler.offset}
     # The review page reads the hook from here.
     target.with_suffix('.edit.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(target)

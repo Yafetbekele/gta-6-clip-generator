@@ -123,6 +123,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     retry = commands.add_parser("retry", help="Return a failed upload to its platform queue")
     retry.add_argument("platform", choices=PLATFORMS)
     retry.add_argument("clip_id")
+    filler = commands.add_parser("filler", help="Add or list background gameplay shown under clips")
+    filler_actions = filler.add_subparsers(dest="filler_action")
+    filler_actions.add_parser("list")
+    filler_add = filler_actions.add_parser("add", help="Save a silent copy of a video file or URL as filler")
+    filler_add.add_argument("kind", help="Kind of filler, such as subway_surfers or minecraft_parkour")
+    filler_add.add_argument("source", help="A local video file or a video URL")
+    filler_add.add_argument("--start", type=float, default=0, help="Seconds to skip at the beginning")
+    filler_add.add_argument("--minutes", type=float, default=15, help="Minutes to keep (default 15)")
+    filler_add.add_argument("--name", help="File name for the saved copy")
     _queue_parser(commands)
     args = parser.parse_args(argv)
 
@@ -182,6 +191,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                       + (f' {moved["missing"]} clip files were missing.' if moved["missing"] else ""))
             print_summary(config)
             return 0
+        if args.command == "filler":
+            from . import filler as fillers
+            if args.filler_action == "add":
+                saved = fillers.add(config.paths.data_dir, args.kind, args.source, start=args.start,
+                                    minutes=args.minutes, name=args.name)
+                print(f"Saved {saved}")
+            found = fillers.summary(config.paths.data_dir)
+            for kind, files in found.items():
+                print(f"{kind}: " + ", ".join(f"{name} ({seconds // 60:.0f} min)" for name, seconds in files))
+            if not found:
+                print(f"No filler yet. Add some with: gta-clips filler add subway_surfers <file or URL>")
+            print(f"editing.filler = {config.editing.filler!r}")
+            return 0
         if args.command == "ingest":
             from .pipeline import ingest
             return ingest(config)
@@ -197,12 +219,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 live_status(config)
             return 0
         if args.command == "ready":
-            from .ready import cleanup, export_due, retitle_explicit, rewrite_notes
+            from .ready import cleanup, export_due, queue_ready_for_instagram, retitle_explicit, rewrite_notes
             with worker_lock(config.paths.data_dir, "ready"):
                 retitle_explicit(config)
                 added = export_due(config)
+                queue_ready_for_instagram(config)
                 rewrite_notes(config)
-                cleanup(config)
+                cleanup(config, config.runtime.ready_keep_days)
+                from .storage import trim_clips
+                trim_clips(config)
             print(f"Added {len(added)} clips to {config.paths.data_dir / 'ready-to-post'}")
             return 0
         if args.command == "stats":

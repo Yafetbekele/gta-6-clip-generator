@@ -14,6 +14,11 @@ from .review import path_for
 from .upload import instagram, tiktok, youtube
 from .upload.common import Result, Upload, UploadError
 
+def INSTAGRAM_WORK(config: Config):
+    """Where 30-second Instagram cuts wait until they are posted."""
+    return config.paths.data_dir / "work" / "instagram"
+
+
 SENDERS: dict[str, Callable[[Upload], Result]] = {
     "youtube": youtube.send,
     "instagram": instagram.send,
@@ -66,6 +71,8 @@ def _run_one(config: Config, platform: str, account: str | None = None) -> bool:
         path = path_for(config, job)
         if not path.is_file() or path.stat().st_size == 0:
             raise UploadError("Approved clip file is missing or empty")
+        if platform == "instagram":
+            path = instagram.prepare(job, path, INSTAGRAM_WORK(config))
         token, login = access_token(database, platform, account)
         authorization_id = login.get("authorization_id")
         bound = checkpoint.get("authorization_id")
@@ -103,6 +110,9 @@ def _run_one(config: Config, platform: str, account: str | None = None) -> bool:
             (result.state, attempts, now + result.delay, sent, result.remote_id, detail,
              "{}" if sent else json.dumps(checkpoint), job["id"], platform),
         )
+    if platform == "instagram" and result.state in ("posted", "failed"):
+        for leftover in INSTAGRAM_WORK(config).glob(f"{job['id']}-*.mp4"):
+            leftover.unlink(missing_ok=True)
     log = logging.warning if result.state in ("failed", "held") or attempts else logging.info
     log("%s%s %s %s | %s", platform, f"@{account}" if account else "", job["id"], result.state, detail)
     return not attempts

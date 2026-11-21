@@ -61,9 +61,12 @@ def _shown(text: str) -> str:
 
 
 def write_ass(path: Path, words: list[Word], streamer: str, duration: float, hook=None,
-              hook_bottom: int | None = None):
-    """``hook`` is a ContextHook headline for the whole clip, its last line ending at ``hook_bottom``."""
-    header = """[Script Info]
+              hook_bottom: int | None = None, caption_margin: int = 340):
+    """``hook`` is a ContextHook headline for the whole clip, its last line ending at ``hook_bottom``.
+
+    Spoken captions end ``caption_margin`` pixels above the bottom edge.
+    """
+    header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -72,7 +75,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,85,120,340,1
+Style: Caption,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,85,120,{caption_margin},1
 Style: Credit,Arial,37,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,7,75,110,110,1
 Style: Hook,Arial,64,&H00FFFFFF,&H00FFFFFF,&H00131313,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,8,70,70,200,1
 
