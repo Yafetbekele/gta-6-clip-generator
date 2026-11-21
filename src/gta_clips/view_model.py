@@ -37,7 +37,7 @@ MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
 
 FEATURE_SQL = """
-SELECT c.id, c.duration, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
+SELECT c.id, c.duration, c.cut_before, c.cut_after, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
        b.messages, f.baseline_per_10s, f.unique_chatters, f.peak_messages, f.peak_unique_chatters,
        f.peak_offset_s, f.viewer_count, f.viewer_rank, f.stream_age_s, f.is_mature,
        cf.speech_seconds, cf.word_count, cf.language_probability, cf.first_word_s, cf.last_word_s,
@@ -69,6 +69,9 @@ def features(row) -> dict[str, float | None]:
     values["stream_age_hours"] = row["stream_age_s"] / 3600 if row["stream_age_s"] is not None else None
     values["words_per_second"] = (row["word_count"] / row["duration"]
                                   if row["word_count"] is not None and row["duration"] else None)
+    # Clip length and where the burst falls in it, part of the cut test (see cuts.py).
+    values["clip_seconds"] = row["duration"]
+    values["cut_before"], values["cut_after"] = row["cut_before"], row["cut_after"]
     values["partner"] = (1.0 if row["broadcaster_type"] == "partner" else 0.0) \
         if row["broadcaster_type"] is not None else None
     values[f"kind={row['kind']}"] = 1.0
@@ -237,20 +240,42 @@ def fit(rows: list[dict], targets: list[float]) -> Model:
     return Model(names, medians, means, scales, weights, bias, len(rows), r2)
 
 
+def cut_results(db) -> dict:
+    """Median views at TARGET_AGE per platform for each lead-in and each follow-through tried.
+
+    Each cut is chosen at random (see cuts.py), so differences here are not explained by which
+    clips got which cut. With fewer than about 30 posts in a group, the median is mostly luck.
+    """
+    views, clips, _ = targets(db)
+    cuts = {row[0]: (row[1], row[2]) for row in db.execute(
+        "SELECT id, cut_before, cut_after FROM clips WHERE cut_before IS NOT NULL AND cut_after IS NOT NULL")}
+    groups: dict[str, dict[str, list[float]]] = {}
+    for key, value in views.items():
+        platform, cut = key[0], cuts.get(clips[key])
+        if cut is None:
+            continue
+        for label in (f"{cut[0]}s before", f"{cut[1]}s after", f"{cut[0]}s before + {cut[1]}s after"):
+            groups.setdefault(platform, {}).setdefault(label, []).append(value)
+    return {platform: {label: {"posts": len(found), "median_views": round(float(np.median(found)))}
+                       for label, found in sorted(labels.items())}
+            for platform, labels in sorted(groups.items())}
+
+
 def train(config: Config, now: float | None = None) -> Model | None:
     """Fit on every qualifying post, save a readable summary, or return None if there are too few."""
     now = time.time() if now is None else now
     with connect(config.paths.database) as db:
         rows, values = training_rows(db, now)
         checked = check(db)
+        report = {"predictions_checked": checked, "cut_test": cut_results(db)}
     path = config.paths.data_dir / SUMMARY
     if len(rows) < MIN_POSTS:
         path.write_text(json.dumps({"posts": len(rows), "needed": MIN_POSTS,
                                     "note": "Clips are picked at random until enough posts have views.",
-                                    "predictions_checked": checked}, indent=2), encoding="utf-8")
+                                    **report}, indent=2), encoding="utf-8")
         return None
     model = fit(rows, values)
-    path.write_text(json.dumps({**model.summary(), "predictions_checked": checked}, indent=2), encoding="utf-8")
+    path.write_text(json.dumps({**model.summary(), **report}, indent=2), encoding="utf-8")
     return model
 
 

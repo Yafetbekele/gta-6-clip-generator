@@ -15,7 +15,7 @@ from .db import connect
 from .diagnostics import CommandFailed, run
 from .download import ffmpeg_binary
 
-# A live clip spans this many seconds either side of its chat anchor (see live_render.HALF_WINDOW).
+# A live clip without a recorded cut spans this many seconds either side of its chat anchor.
 HALF_WINDOW = 30
 # Chat compared before and after the clip, in seconds.
 AROUND = 60
@@ -86,20 +86,23 @@ def _scenes(path: Path, layout: str) -> int:
     return sum("pts_time" in line for line in result.stderr.splitlines())
 
 
-def _chat(db, stream_id: str, anchor: int) -> dict:
-    start = anchor - HALF_WINDOW
+def _chat(db, stream_id: str, anchor: int, before: int | None = None, after: int | None = None) -> dict:
+    """Chat during the clip's own window: ``before`` and ``after`` seconds around its anchor."""
+    before = HALF_WINDOW if before is None else before
+    after = HALF_WINDOW if after is None else after
+    start, end = anchor - before, anchor + after
     rows = db.execute("""SELECT ts, messages, COALESCE(emotes, 0) AS emotes, COALESCE(cheers, 0) AS cheers,
                                 COALESCE(bits, 0) AS bits FROM chat_seconds
                          WHERE stream_id=? AND ts >= ? AND ts < ?""",
-                      (stream_id, start - AROUND, start + 2 * HALF_WINDOW + AROUND)).fetchall()
+                      (stream_id, start - AROUND, end + AROUND)).fetchall()
     if not rows:
         return {}
-    inside = [row for row in rows if start <= row["ts"] < start + 2 * HALF_WINDOW]
+    inside = [row for row in rows if start <= row["ts"] < end]
     peak = max(inside, key=lambda row: row["messages"], default=None)
     return {
         "chat_messages": sum(row["messages"] for row in inside),
         "chat_before": sum(row["messages"] for row in rows if row["ts"] < start),
-        "chat_after": sum(row["messages"] for row in rows if row["ts"] >= start + 2 * HALF_WINDOW),
+        "chat_after": sum(row["messages"] for row in rows if row["ts"] >= end),
         "chat_peak_second": peak["messages"] if peak else 0,
         "chat_peak_at_s": peak["ts"] - start if peak else None,
         "chat_emotes": sum(row["emotes"] for row in inside),
@@ -142,7 +145,7 @@ def measure(config: Config, budget_seconds: float = 600, limit: int | None = Non
     only = f"AND c.id IN ({','.join('?' * len(clip_ids))})" if clip_ids else ""
     with connect(config.paths.database) as db:
         clips = db.execute(
-            f"""SELECT c.id, c.path, c.duration, b.stream_id, b.anchor, b.broadcaster_id
+            f"""SELECT c.id, c.path, c.duration, c.cut_before, c.cut_after, b.stream_id, b.anchor, b.broadcaster_id
                FROM clips c LEFT JOIN live_bursts b ON b.clip_id = c.id
                WHERE NOT EXISTS (SELECT 1 FROM clip_stats s WHERE s.clip_id = c.id) {only}
                ORDER BY c.created DESC""", clip_ids or []).fetchall()
@@ -162,7 +165,7 @@ def measure(config: Config, budget_seconds: float = 600, limit: int | None = Non
             stats["error"] = str(error)[:500]
         with connect(config.paths.database) as db:
             if clip["stream_id"]:
-                stats.update(_chat(db, clip["stream_id"], clip["anchor"]))
+                stats.update(_chat(db, clip["stream_id"], clip["anchor"], clip["cut_before"], clip["cut_after"]))
                 owner = db.execute("SELECT broadcaster_type, created_at FROM broadcasters WHERE broadcaster_id=?",
                                    (clip["broadcaster_id"],)).fetchone()
                 if owner:

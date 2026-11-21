@@ -174,6 +174,10 @@ MIGRATIONS = [
     ),
     # The views model's guess for each clip when it was offered, to check against its real views.
     ((("ready_exports", "predicted", "REAL"),), ""),
+    # Seconds of stream a live clip shows before and after its chat burst (see cuts.py).
+    # Live clips before the cut test were all 30 s + 30 s.
+    ((("clips", "cut_before", "INTEGER"), ("clips", "cut_after", "INTEGER")),
+     "UPDATE clips SET cut_before = 30, cut_after = 30 WHERE id LIKE 'live-%' AND duration = 60"),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

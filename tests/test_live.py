@@ -8,6 +8,7 @@ from unittest.mock import patch
 import time
 import unittest
 
+from gta_clips import cuts
 from gta_clips.config import LiveConfig, PathsConfig, load_config
 from gta_clips.db import connect
 from gta_clips.live import Broadcast, ChatRate, _chat_event, record_burst
@@ -86,6 +87,42 @@ class LiveTest(unittest.TestCase):
         video["duration"] = "1m20s"
         self.assertEqual(archive_window([video], "12", 1050), ("9", 20))
         self.assertIsNone(archive_window([video], "12", 1010))
+
+    def test_archive_window_uses_the_clips_own_cut(self):
+        video = {"stream_id": "12", "id": "9", "duration": "1m10s",
+                 "created_at": datetime.fromtimestamp(1000, timezone.utc).isoformat()}
+        # 45 s before and 5 s after a burst at 1050 starts 5 s in and ends at 55 s.
+        self.assertEqual(archive_window([video], "12", 1050, (45, 5)), ("9", 5))
+        self.assertIsNone(archive_window([video], "12", 1050, (30, 30)))
+
+    def test_cuts_are_random_per_burst_but_stable_and_only_for_bursts(self):
+        self.assertEqual(cuts.choose("12", 1000, "burst", False), cuts.STANDARD)
+        self.assertEqual(cuts.choose("12", 1000, "control", True), cuts.STANDARD)
+        self.assertEqual(cuts.choose("12", 1000, "burst", True), cuts.choose("12", 1000, "burst", True))
+        chosen = {cuts.choose("12", anchor, "burst", True) for anchor in range(500)}
+        self.assertEqual(chosen, {(b, a) for b in cuts.BEFORE for a in cuts.AFTER})
+
+    def test_a_burst_too_early_for_the_longest_lead_in_is_skipped(self):
+        stream = Broadcast("12", "42", "streamer", 1000)
+        self.assertFalse(record_burst(self.config, stream, 1000 + cuts.MOST_BEFORE - 1, 22))
+
+    def test_a_test_cut_is_rendered_and_recorded(self):
+        anchor = int(time.time()) - 60
+        start = anchor - 75
+        config = replace(self.config, live=replace(self.config.live, test_cuts=True))
+        self.assertTrue(record_burst(config, Broadcast("12", "42", "streamer", start), anchor, 22))
+        before, after = cuts.choose("12", anchor, "burst", True)
+        with patch("gta_clips.live_render.Twitch") as twitch,                 patch("gta_clips.live_render.download_vod") as download,                 patch("gta_clips.live_render.render", return_value="The jump worked") as render:
+            twitch.return_value.get.return_value = {"data": [
+                {"stream_id": "12", "id": "9", "duration": "3m",
+                 "created_at": datetime.fromtimestamp(start, timezone.utc).isoformat()},
+            ]}
+            render_due(config)
+        self.assertEqual(download.call_args.kwargs["section"], (75 - before - 3, 75 + after + 3))
+        self.assertEqual(render.call_args.args[3].duration, before + after)
+        with connect(config.paths.database) as db:
+            self.assertEqual(tuple(db.execute("SELECT duration, cut_before, cut_after FROM clips").fetchone()),
+                             (before + after, before, after))
 
     def test_segment_is_queued_for_review_and_resume_is_idempotent(self):
         anchor = int(time.time()) - 60

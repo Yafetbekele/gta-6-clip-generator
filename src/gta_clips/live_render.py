@@ -16,6 +16,7 @@ import requests
 
 from .captions import Transcriber
 from .config import Config
+from .cuts import STANDARD, choose
 from .db import INSERT_CLIP, WorkerBusy, connect, worker_lock
 from .diagnostics import describe
 from .discovery import Twitch, _duration, _timestamp
@@ -27,19 +28,20 @@ from .metadata import generate
 MAX_ARCHIVE_WAIT = 48 * 3600
 # Twitch lists a stream's archive while it is still live. None after this long means VODs are off.
 NO_ARCHIVE_GRACE = 2 * 3600
-HALF_WINDOW = 30
 # Extra seconds fetched on each side so the render can cut the exact window from a stream copy.
 PAD = 3
 MAX_RETRY_DELAY = 3600
 
 
-def archive_window(archives: list[dict], stream_id: str, anchor: int) -> tuple[str, int] | None:
-    """Return a VOD ID and its offset for the full 30s before and after a burst."""
+def archive_window(archives: list[dict], stream_id: str, anchor: int,
+                   cut: tuple[int, int] = STANDARD) -> tuple[str, int] | None:
+    """Return a VOD ID and its offset for the full window: ``cut`` seconds before and after a burst."""
+    before, after = cut
     for vod in archives:
         if vod.get("stream_id") != stream_id or not vod["id"].isdecimal():
             continue
-        start = anchor - HALF_WINDOW - round(_timestamp(vod["created_at"]).timestamp())
-        if start >= 0 and start + 2 * HALF_WINDOW <= _duration(vod["duration"]):
+        start = anchor - before - round(_timestamp(vod["created_at"]).timestamp())
+        if start >= 0 and start + before + after <= _duration(vod["duration"]):
             return vod["id"], start
     return None
 
@@ -124,6 +126,10 @@ def mark_unclippable(config: Config, burst, reason: str):
     logging.warning("Clips from %s's current stream are unavailable: %s", burst["streamer"], reason)
 
 
+def _cut(config: Config, burst) -> tuple[int, int]:
+    return choose(burst["stream_id"], burst["anchor"], burst["trigger_kind"], config.live.test_cuts)
+
+
 def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start: int,
             vod_duration: int, muted: float = 0.0):
     stream_id, anchor = burst["stream_id"], burst["anchor"]
@@ -133,7 +139,8 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
     relative = Path("clips") / (account.name if account else "") / f"{clip_id}.mp4"
     staging = config.paths.data_dir / "work"
     staging.mkdir(parents=True, exist_ok=True)
-    length = 2 * HALF_WINDOW
+    cut_before, cut_after = _cut(config, burst)
+    length = cut_before + cut_after
     before = min(PAD, start)
     section = (start - before, min(vod_duration, start + length + PAD))
     with TemporaryDirectory(prefix=f"{clip_id}-", dir=staging, ignore_cleanup_errors=True) as directory:
@@ -143,7 +150,7 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
                               max_height=max_source_height(config.editing))
         downloaded = time.monotonic()
         details = {}
-        # render() cuts the exact 60 seconds and rejects a section that is still too short.
+        # render() cuts the exact window and rejects a section that is still too short.
         transcript = render(source, working, config.paths.data_dir / relative,
                             Moment(before, length, burst["messages"]), burst["streamer"],
                             config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id,
@@ -154,7 +161,8 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
                        (vod_id, burst["streamer"]))
             db.execute(INSERT_CLIP, (clip_id, vod_id, burst["streamer"], relative.as_posix(), start,
                                     length, transcript, metadata.title, metadata.description, metadata.hashtags))
-            db.execute("UPDATE clips SET account=? WHERE id=?", (account.name if account else None, clip_id))
+            db.execute("UPDATE clips SET account=?, cut_before=?, cut_after=? WHERE id=?",
+                       (account.name if account else None, cut_before, cut_after, clip_id))
             db.execute(
                 """INSERT OR REPLACE INTO clip_features(clip_id, source, speech_seconds, word_count,
                        language, language_probability, first_word_s, last_word_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -237,20 +245,21 @@ def _find_window(config: Config, context: RenderContext, burst, archives: dict):
             "user_id": broadcaster, "type": "archive", "sort": "time", "first": 30,
         })["data"]
     listed = archives[broadcaster]
-    window = archive_window(listed, burst["stream_id"], burst["anchor"])
+    cut = _cut(config, burst)
+    window = archive_window(listed, burst["stream_id"], burst["anchor"], cut)
     if window is None:
         has_archive = any(vod.get("stream_id") == burst["stream_id"] for vod in listed)
         if not has_archive and time.time() - burst["anchor"] > NO_ARCHIVE_GRACE:
             mark_unclippable(config, burst, "No Twitch archive for this stream (VODs may be off)")
         else:
-            _waiting(config, burst, "Waiting for the Twitch archive to cover the full 60 seconds")
+            _waiting(config, burst, f"Waiting for the Twitch archive to cover the full {sum(cut)} seconds")
         return None
     vod_id, start = window
     if any(vod["id"] == vod_id and vod.get("viewable") == "private" for vod in listed):
         mark_unclippable(config, burst, "The Twitch archive is not public")
         return None
     duration = next(_duration(vod["duration"]) for vod in listed if vod["id"] == vod_id)
-    return burst, vod_id, start, duration, muted_overlap(listed, vod_id, start, 2 * HALF_WINDOW)
+    return burst, vod_id, start, duration, muted_overlap(listed, vod_id, start, sum(cut))
 
 
 def _attempt(config: Config, burst, action):

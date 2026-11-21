@@ -21,7 +21,8 @@ from .config import Config, Feed, LiveConfig
 from .db import connect, worker_lock
 from .diagnostics import describe, redact
 from .discovery import Twitch, _timestamp
-from .live_render import HALF_WINDOW, RenderContext, render_due
+from .cuts import MOST_AFTER, MOST_BEFORE
+from .live_render import RenderContext, render_due
 from .oauth import access_token
 
 EVENTSUB_URL = "wss://eventsub.wss.twitch.tv/ws?keepalive_timeout_seconds=30"
@@ -36,7 +37,7 @@ RATE_RETENTION = 600
 RANK_SLACK = 5
 MIN_DWELL_SECONDS = 600
 CANDIDATE_EXTRA = 10
-PEAK_SECONDS = HALF_WINDOW
+PEAK_SECONDS = 30
 # Frames buffered by the socket's reader thread, so Twitch's pings are answered during HTTP work.
 RECEIVE_QUEUE = 10_000
 NETWORK_ERRORS = (WebSocketException, OSError, requests.RequestException)
@@ -219,7 +220,8 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
     real burst. Controls and near misses stay clear of every recorded window.
     """
     anchor = int(timestamp)
-    if anchor < stream.started_at + HALF_WINDOW:
+    # Every cut needs its lead-in to fall inside the stream.
+    if anchor < stream.started_at + MOST_BEFORE:
         return False
     features = features or {}
     with connect(config.paths.database) as db:
@@ -241,9 +243,9 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
         db.execute(
             """INSERT INTO live_bursts(stream_id, anchor, broadcaster_id, streamer, game_name,
                                        messages, retry_at, detail, trigger_kind, account)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting for 30 seconds of post-roll', ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting for the post-roll', ?, ?)""",
             (stream.stream_id, anchor, stream.broadcaster_id, stream.login,
-             stream.game_name or config.twitch.game_name, messages, anchor + HALF_WINDOW, kind,
+             stream.game_name or config.twitch.game_name, messages, anchor + MOST_AFTER, kind,
              pick_account(db, config, stream.feed)),
         )
         db.execute(
@@ -525,7 +527,7 @@ def _chat_event(config: Config, packet: dict, desired: dict[str, Broadcast],
     unique = rate.unique_chatters
     if count and timestamp >= rate.last_burst + live.cooldown_seconds:
         # Throttle on delivery too, even if a previous process already recorded the window.
-        if int(timestamp) < stream.started_at + HALF_WINDOW:
+        if int(timestamp) < stream.started_at + MOST_BEFORE:
             return
         rate.last_burst = int(timestamp)
         rate.near_miss = None  # The candidate grew into a real burst.

@@ -99,6 +99,8 @@ class LiveConfig:
     near_miss_interval_seconds: int = 3600
     # Live clips rendered at the same time. Each one downloads, transcribes and encodes on its own.
     render_workers: int = 2
+    # Give each burst clip a random lead-in and follow-through (see cuts.py) instead of 30 s + 30 s.
+    test_cuts: bool = False
 
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -233,6 +235,12 @@ def _integer(value: object, path: str, minimum: int, maximum: int | None = None)
     if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
         bounds = f"between {minimum} and {maximum}" if maximum is not None else f"at least {minimum}"
         raise ConfigError(f"{path} must be an integer {bounds}")
+    return value
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{path} must be true or false")
     return value
 
 
@@ -384,6 +392,7 @@ def _live(raw: object) -> LiveConfig:
                                   "live.cooldown_seconds", 60),
         render_workers=_integer(options.get("render_workers", defaults.render_workers),
                                 "live.render_workers", 1, 4),
+        test_cuts=_boolean(options.get("test_cuts", defaults.test_cuts), "live.test_cuts"),
     )
 
 
