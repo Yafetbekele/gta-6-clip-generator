@@ -16,7 +16,7 @@ import requests
 
 from .config import Config
 from .db import connect
-from .oauth import access_token
+from .oauth import INSTAGRAM_GRAPH, access_token, instagram_version
 
 YOUTUBE_VIDEOS = "https://www.googleapis.com/youtube/v3/videos"
 YOUTUBE_ANALYTICS = "https://youtubeanalytics.googleapis.com/v2/reports"
@@ -240,6 +240,83 @@ def fetch_youtube(config: Config, now: float | None = None) -> dict:
                             entry.get("avg_view_percent"), entry.get("subscribers_gained"),
                             entry["age_restricted"], entry["blocked_countries"]))
                 result["fetched"] += 1
+    return result
+
+
+# Meta keeps no insights for media posted before the account became a professional account.
+PRE_CONVERSION = 2108006
+
+
+def _instagram_get(url: str, token: str, params: dict) -> requests.Response:
+    return requests.get(url, params=params, headers={"Authorization": f"Bearer {token}"}, timeout=30)
+
+
+def fetch_instagram(config: Config, now: float | None = None) -> dict:
+    """Views, reach, likes, comments, shares and saves for each Reel of every account with an API login.
+
+    Media is matched to ``posts`` by its media id (posts made by the publisher) or by the shortcode
+    in its permalink (posts recorded from links); Reels not yet known are added without a clip.
+    Media from before an account turned professional has no insights, so it gets no snapshot and
+    keeps the browser collector's view counts.
+    """
+    now = time.time() if now is None else now
+    result = {"fetched": 0, "missing_login": set(), "no_insights": 0}
+    try:
+        base = f"{INSTAGRAM_GRAPH}/{instagram_version()}"
+    except ValueError as error:
+        logging.warning("Instagram stats skipped: %s", error)
+        return result
+    with connect(config.paths.database) as db:
+        logins = [row[0].split("@", 1)[1] for row in db.execute(
+            "SELECT platform FROM oauth WHERE platform LIKE 'instagram@%'")]
+        due = {row["video_id"]: row for row in _due(db, "instagram", now)}
+    for account in sorted(logins):
+        try:
+            token, login = access_token(config.paths.database, "instagram", account)
+        except RuntimeError:
+            result["missing_login"].add(account)
+            continue
+        media, url, params = [], f"{base}/{login['user_id']}/media", {
+            "fields": "id,permalink,timestamp,like_count,comments_count", "limit": 50}
+        for _ in range(4):
+            response = _instagram_get(url, token, params)
+            if response.status_code in (400, 401, 403) and not media:
+                result["missing_login"].add(account)
+                break
+            response.raise_for_status()
+            body = response.json()
+            media += body.get("data", [])
+            url, params = body.get("paging", {}).get("next"), {}
+            if not url:
+                break
+        for item in media:
+            parsed = parse_url(item.get("permalink", ""))
+            video_id = item["id"] if item["id"] in due else (parsed[1] if parsed else item["id"])
+            row = due.get(video_id)
+            if row is not None and ((row["fetched"] or 0) >= now - REFRESH_SECONDS
+                                    or (row["published"] and row["published"] < now - SETTLED_SECONDS)):
+                continue
+            insights = _instagram_get(f"{base}/{item['id']}/insights", token,
+                                      {"metric": "views,reach,shares,saved"})
+            if not insights.ok:
+                if insights.json().get("error", {}).get("error_subcode") != PRE_CONVERSION:
+                    logging.info("No Instagram insights for %s: HTTP %s", video_id, insights.status_code)
+                result["no_insights"] += 1
+                continue
+            numbers = {entry["name"]: entry["values"][0]["value"] for entry in insights.json().get("data", [])}
+            published = datetime.fromisoformat(item["timestamp"].replace("+0000", "+00:00")).timestamp()
+            with connect(config.paths.database) as db:
+                if row is None:
+                    db.execute("INSERT OR IGNORE INTO posts(platform, video_id, account, url, source) "
+                               "VALUES ('instagram', ?, ?, ?, 'instagram-api')",
+                               (video_id, account, item.get("permalink", "")))
+                db.execute("""INSERT OR REPLACE INTO post_stats(platform, video_id, fetched, published, views,
+                                  likes, comments, shares)
+                              VALUES ('instagram', ?, ?, ?, ?, ?, ?, ?)""",
+                           (video_id, int(now), published, _int(numbers.get("views")),
+                            _int(item.get("like_count")), _int(item.get("comments_count")),
+                            _int(numbers.get("shares"))))
+            result["fetched"] += 1
     return result
 
 

@@ -6,7 +6,7 @@ from requests import RequestException
 
 from .clip_stats import measure, refresh_broadcasters
 from .config import Config
-from .post_stats import fetch_youtube, match_by_time, sync
+from .post_stats import fetch_instagram, fetch_youtube, match_by_time, sync
 from .view_model import MIN_POSTS, train
 
 
@@ -26,6 +26,14 @@ def run_stats(config: Config, budget_seconds: float = 600) -> str:
         lines.append(f"Sign in again to read views: gta-clips auth youtube --account <set> ({sets})")
     if result["no_analytics"]:
         lines.append("No watch-time numbers for: " + ", ".join(sorted(result["no_analytics"])))
+    try:
+        instagram = fetch_instagram(config)
+        lines.append(f"Read Instagram numbers for {instagram['fetched']} posts")
+        if instagram["missing_login"]:
+            sets = ", ".join(sorted(instagram["missing_login"]))
+            lines.append(f"Generate a new Instagram token: gta-clips auth instagram --account <set> ({sets})")
+    except RequestException as error:
+        logging.warning("Could not read Instagram numbers: %s", error)
     model = train(config)
     lines.append(f"Views model: fitted on {model.posts} posts" if model
                  else f"Views model: waiting for {MIN_POSTS} posts with 24-hour views; clips are picked at random")
