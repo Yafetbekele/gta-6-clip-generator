@@ -30,6 +30,29 @@ class TrackingExportTests(unittest.TestCase):
             self.assertEqual((data / 'state.sqlite3').read_bytes(), before)
             export_tracking(settings)
 
+    def test_banned_channels_are_marked_and_left_out_of_totals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'data').mkdir()
+            settings = root / 'browser-upload.json'
+            settings.write_text('{}')
+            (root / 'config.toml').write_text('[[accounts]]\nname = "gta6-1"\nbanned = ["instagram"]\n')
+            db = sqlite3.connect(root / 'data' / 'state.sqlite3')
+            db.executescript('''CREATE TABLE posts(platform,video_id,clip_id,account,url);
+                CREATE TABLE post_stats(platform,video_id,fetched,views,likes,comments);
+                CREATE TABLE clips(id,title);
+                INSERT INTO clips VALUES('c1','Big moment');
+                INSERT INTO posts VALUES('instagram','abc','c1','gta6-1','');
+                INSERT INTO posts VALUES('youtube','defghij','c1','gta6-1','');
+                INSERT INTO post_stats VALUES('instagram','abc',1,5000,NULL,NULL);
+                INSERT INTO post_stats VALUES('youtube','defghij',1,120,3,0);''')
+            db.close()
+            page = (export_tracking(settings) / 'index.html').read_text(encoding='utf-8')
+            self.assertIn('Banned', page)
+            self.assertIn('Big moment', page)
+            self.assertNotIn('<b>5,000</b>', page)
+            self.assertIn('<b>120</b>', page)
+
     def test_empty_install_report_does_not_invent_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = Path(directory) / 'browser-upload.json'

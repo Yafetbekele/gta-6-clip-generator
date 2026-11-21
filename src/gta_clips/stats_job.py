@@ -37,6 +37,15 @@ def run_stats(config: Config, budget_seconds: float = 600) -> str:
     model = train(config)
     lines.append(f"Views model: fitted on {model.posts} posts" if model
                  else f"Views model: waiting for {MIN_POSTS} posts with 24-hour views; clips are picked at random")
+    settings = config.paths.data_dir.parent / "browser-upload.json"
+    if settings.is_file():
+        from .db import WorkerBusy
+        from .view_tracking import export_tracking
+        try:
+            export_tracking(settings)
+            lines.append("Rebuilt the view tracking page")
+        except (OSError, ValueError, WorkerBusy) as error:
+            logging.warning("Could not rebuild the view tracking page: %s", error)
     for line in lines:
         logging.info(line)
     return "\n".join(lines)

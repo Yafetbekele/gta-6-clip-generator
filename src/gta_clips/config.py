@@ -163,6 +163,8 @@ class AccountConfig:
     instagram: str = ""
     # The sign-in email for these accounts, shown in notes. Never a password.
     email: str = ""
+    # Platforms where this set's account is banned, such as ["instagram"]. Reports mark them.
+    banned: tuple[str, ...] = ()
 
     @property
     def title(self) -> str:
@@ -424,8 +426,11 @@ def _accounts(raw: object) -> tuple[AccountConfig, ...]:
             if not isinstance(handle, str) or "\n" in handle or len(handle) > 100:
                 raise ConfigError(f"{path}.{platform} must be a channel or account name on one line")
             handles[platform] = handle.strip()
+        banned = options.get("banned", [])
+        if not isinstance(banned, list) or any(platform not in PLATFORMS for platform in banned):
+            raise ConfigError(f"{path}.banned must be a list of platforms: {', '.join(PLATFORMS)}")
         accounts.append(AccountConfig(
-            name=name, category=_text(options.get("category"), f"{path}.category"),
+            name=name, category=_text(options.get("category"), f"{path}.category"), banned=tuple(banned),
             language=language.strip().lower(),
             channels=_integer(options.get("channels", 5), f"{path}.channels", 1, 20),
             label=label.strip(), **handles,
