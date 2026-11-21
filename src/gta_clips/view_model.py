@@ -37,7 +37,7 @@ MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
 
 FEATURE_SQL = """
-SELECT c.id, c.duration, c.cut_before, c.cut_after, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
+SELECT c.id, c.duration, c.cut_before, c.cut_after, c.hook_style, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
        b.messages, f.baseline_per_10s, f.unique_chatters, f.peak_messages, f.peak_unique_chatters,
        f.peak_offset_s, f.viewer_count, f.viewer_rank, f.stream_age_s, f.is_mature,
        cf.speech_seconds, cf.word_count, cf.language_probability, cf.first_word_s, cf.last_word_s,
@@ -75,6 +75,9 @@ def features(row) -> dict[str, float | None]:
     values["partner"] = (1.0 if row["broadcaster_type"] == "partner" else 0.0) \
         if row["broadcaster_type"] is not None else None
     values[f"kind={row['kind']}"] = 1.0
+    # The hook style the hook test gave the clip (see hook_styles.py); none when the test was off.
+    if row["hook_style"]:
+        values[f"hook={row['hook_style']}"] = 1.0
     if row["game"]:
         values[f"category={row['game']}"] = 1.0
     # Some accounts reach far more people than others; this keeps that from counting as clip quality.
@@ -261,13 +264,37 @@ def cut_results(db) -> dict:
             for platform, labels in sorted(groups.items())}
 
 
+def hook_results(db) -> dict:
+    """Median views at TARGET_AGE per platform for each hook style tried, and for what was shown.
+
+    Each style is chosen at random (see hook_styles.py), so differences between styles are not
+    explained by which clips got which style. "shown" groups are not random: a clip given "quote"
+    shows a question when it has no usable quote. With fewer than about 30 posts in a group, the
+    median is mostly luck.
+    """
+    views, clips, _ = targets(db)
+    styles = {row[0]: (row[1], row[2] or "unknown") for row in db.execute(
+        "SELECT id, hook_style, hook_method FROM clips WHERE hook_style IS NOT NULL")}
+    groups: dict[str, dict[str, list[float]]] = {}
+    for key, value in views.items():
+        platform, found = key[0], styles.get(clips[key])
+        if found is None:
+            continue
+        for label in (found[0], f"{found[0]}, shown {found[1]}"):
+            groups.setdefault(platform, {}).setdefault(label, []).append(value)
+    return {platform: {label: {"posts": len(found), "median_views": round(float(np.median(found)))}
+                       for label, found in sorted(labels.items())}
+            for platform, labels in sorted(groups.items())}
+
+
 def train(config: Config, now: float | None = None) -> Model | None:
     """Fit on every qualifying post, save a readable summary, or return None if there are too few."""
     now = time.time() if now is None else now
     with connect(config.paths.database) as db:
         rows, values = training_rows(db, now)
         checked = check(db)
-        report = {"predictions_checked": checked, "cut_test": cut_results(db)}
+        report = {"predictions_checked": checked, "cut_test": cut_results(db), "hook_test": hook_results(db),
+                  "test_note": "Each group needs about 30 posts before its median means much."}
     path = config.paths.data_dir / SUMMARY
     if len(rows) < MIN_POSTS:
         path.write_text(json.dumps({"posts": len(rows), "needed": MIN_POSTS,

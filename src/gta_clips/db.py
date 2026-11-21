@@ -178,6 +178,9 @@ MIGRATIONS = [
     # Live clips before the cut test were all 30 s + 30 s.
     ((("clips", "cut_before", "INTEGER"), ("clips", "cut_after", "INTEGER")),
      "UPDATE clips SET cut_before = 30, cut_after = 30 WHERE id LIKE 'live-%' AND duration = 60"),
+    # The hook style a clip was given by the hook test (see hook_styles.py; empty when the test was
+    # off) and the kind of hook actually shown: a ContextHook method such as debate_quote_v1.
+    ((("clips", "hook_style", "TEXT"), ("clips", "hook_method", "TEXT")), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

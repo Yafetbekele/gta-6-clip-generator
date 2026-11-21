@@ -79,50 +79,82 @@ NOT_A_GAME = {'just chatting', 'irl', 'talk shows & podcasts'}
 # Prompts frame the streamer's own words as something to argue about; they claim nothing.
 QUOTE_LABELS = {
     'en': ('HOT TAKE OR FACTS?', 'AGREE OR DISAGREE?', 'IS THIS TAKE TOO FAR?',
-           'CHAT WAS SPLIT ON THIS', 'RIGHT OR WRONG?'),
+           'CHAT WAS SPLIT ON THIS', 'RIGHT OR WRONG?', 'FAIR POINT OR NOT?',
+           'DOES THIS TAKE HOLD UP?', 'BASED OR NOT?', 'TOO HARSH OR FAIR?',
+           'WHO AGREES WITH THIS?'),
     'es': ('¿OPINIÓN POLÉMICA O VERDAD?', '¿DE ACUERDO O NO?', '¿SE PASÓ CON ESTO?',
-           'EL CHAT SE DIVIDIÓ', '¿TIENE RAZÓN O NO?'),
+           'EL CHAT SE DIVIDIÓ', '¿TIENE RAZÓN O NO?', '¿TIENE SENTIDO O NO?',
+           '¿ARGUMENTO VÁLIDO O NO?', '¿QUIÉN ESTÁ DE ACUERDO?', '¿DEMASIADO DURO O JUSTO?',
+           '¿TÚ DIRÍAS LO MISMO?'),
     'pt': ('OPINIÃO POLÊMICA OU VERDADE?', 'CONCORDA OU DISCORDA?', 'PASSOU DOS LIMITES?',
-           'O CHAT FICOU DIVIDIDO', 'CERTO OU ERRADO?'),
+           'O CHAT FICOU DIVIDIDO', 'CERTO OU ERRADO?', 'FAZ SENTIDO OU NÃO?',
+           'ARGUMENTO VÁLIDO OU NÃO?', 'QUEM CONCORDA COM ISSO?', 'PESADO DEMAIS OU JUSTO?',
+           'VOCÊ DIRIA O MESMO?'),
 }
 # Opinions about the game itself, never about the streamer, kept as questions or "change my mind".
 GAME_TAKES = (('UNPOPULAR OPINION', '{game} is overhyped. Change my mind.'),
               ('BE HONEST', 'Was {game} really worth the wait?'),
               ('DEBATE', 'Is {game} already the best game ever made?'),
               ('HOT TAKE', '{game} online will ruin {game}. Agree?'),
-              ('BE HONEST', 'Is {game} actually better than {previous}?'))
+              ('BE HONEST', 'Would you pay full price for {game}?'),
+              ('UNPOPULAR OPINION', '{game} is too long. Change my mind.'),
+              ('BE HONEST', 'Is {game} a 10/10 or just hype?'),
+              ('DEBATE', 'What matters more in {game}: story or free roam?'),
+              ('HOT TAKE', '{game} is more fun solo than with friends. Agree?'))
+# Comparisons with the previous game, used only where that game is known (GTA 6 against GTA 5).
+SEQUEL_TAKES = (('BE HONEST', 'Is {game} actually better than {previous}?'),
+                ('DEBATE', 'Will the {game} map beat {previous}? Be honest.'))
 GENERIC_TAKES = {
     'en': (('BE HONEST', 'Who was actually right here?'),
            ('DEBATE', 'Was this out of line or fair?'),
-           ('HOT TAKE', 'Chat overreacted to this. Agree?')),
+           ('HOT TAKE', 'Chat overreacted to this. Agree?'),
+           ('BE HONEST', 'Would you have done the same?'),
+           ('DEBATE', 'Smart move or total throw?'),
+           ('DEBATE', 'Was this a W or an L?')),
     'es': (('SÉ SINCERO', '¿Quién tenía razón aquí?'),
            ('DEBATE', '¿Se pasó de la raya o fue justo?'),
-           ('OPINIÓN POLÉMICA', 'El chat exageró con esto. ¿De acuerdo?')),
+           ('OPINIÓN POLÉMICA', 'El chat exageró con esto. ¿De acuerdo?'),
+           ('SÉ SINCERO', '¿Tú habrías hecho lo mismo?'),
+           ('DEBATE', '¿Jugada inteligente o error total?'),
+           ('DEBATE', '¿Esto fue una W o una L?')),
     'pt': (('SEJA SINCERO', 'Quem estava certo aqui?'),
            ('DEBATE', 'Isso passou do limite ou foi justo?'),
-           ('OPINIÃO POLÊMICA', 'O chat exagerou nisso. Concorda?')),
+           ('OPINIÃO POLÊMICA', 'O chat exagerou nisso. Concorda?'),
+           ('SEJA SINCERO', 'Você teria feito o mesmo?'),
+           ('DEBATE', 'Jogada esperta ou erro total?'),
+           ('DEBATE', 'Isso foi W ou L?')),
 }
+# Kinds of hook the hook test compares (see hook_styles.py). "quote" is the normal behaviour.
+STYLES = ('quote', 'game', 'generic', 'none')
 
 
 def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool = True,
-                language: str = 'en') -> ContextHook:
+                language: str = 'en', style: str = 'quote') -> ContextHook:
     """A debate prompt over the clip's own words, or an opinion question about the game.
 
     Template-based, not an LLM. ``key`` keeps the choice stable when a clip is re-rendered.
     The text is a suggestion for human review before anything is published. ``language`` picks
     the wording (en, es or pt; others use English); game takes are written in English only.
+
+    ``style`` is the kind of hook wanted: "quote" (the clip's words, else a game question, else
+    a generic one), "game" (a game question even when a quote exists, else generic), "generic",
+    or "none" (no hook box). The returned ``method`` says what was actually made.
     """
+    if style not in STYLES:
+        raise ValueError(f'Unknown hook style {style!r}')
+    if style == 'none':
+        return ContextHook()
     language = language if language in QUOTE_LABELS else 'en'
     pick = zlib.crc32(key.encode('utf-8'))
     # ``quote=False`` when the speech is unreliable, such as a language Whisper was unsure of.
-    spoken = suggest_hook(transcript) if quote else ContextHook()
+    spoken = suggest_hook(transcript) if quote and style == 'quote' else ContextHook()
     if spoken.text:
         labels = QUOTE_LABELS[language]
         return ContextHook(spoken.text, spoken.evidence, 'debate_quote_v1', labels[pick % len(labels)])
     name = clean_text(topic)
-    if name and name.casefold() not in NOT_A_GAME and language == 'en':
+    if style != 'generic' and name and name.casefold() not in NOT_A_GAME and language == 'en':
         game = SHORT_GAME.get(name.casefold(), name)
-        takes = GAME_TAKES if game == 'GTA 6' else GAME_TAKES[:4]
+        takes = GAME_TAKES + SEQUEL_TAKES if game == 'GTA 6' else GAME_TAKES
         label, text = takes[pick % len(takes)]
         text = text.format(game=game, previous='GTA 5')
         if len(text) <= MAX_HOOK_LENGTH:

@@ -68,6 +68,8 @@ class EditingConfig:
     whisper_model: str
     streamers: dict[str, SplitLayout]
     renderer: str = "ffmpeg"
+    # Give each clip a random kind of hook box (see hook_styles.py) instead of the usual one.
+    test_hooks: bool = False
 
 
 @dataclass(frozen=True)
@@ -340,7 +342,8 @@ def _editing(raw: object) -> EditingConfig:
         raise ConfigError("editing.renderer must be 'ffmpeg' or 'remotion'")
     if renderer == "remotion" and layout != "fit":
         raise ConfigError("The Remotion renderer currently requires editing.layout = 'fit'")
-    return EditingConfig(layout, _text(options.get("whisper_model", "base"), "editing.whisper_model"), layouts, renderer)
+    return EditingConfig(layout, _text(options.get("whisper_model", "base"), "editing.whisper_model"), layouts, renderer,
+                         test_hooks=_boolean(options.get("test_hooks", False), "editing.test_hooks"))
 
 
 def _schedule(raw: object) -> dict[str, ScheduleConfig]:

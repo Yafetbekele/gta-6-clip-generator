@@ -66,11 +66,13 @@ def render(
     source: Path, working: Path, target: Path, moment: Moment, streamer: str,
     settings: EditingConfig, transcriber: Transcriber, details: dict | None = None,
     *, hook_text: str | None = None, topic: str = "", hook_key: str = "", language: str = "en",
+    hook_style: str = "quote",
 ) -> str:
     """Render ``moment`` exactly. ``details`` (if given) receives timing and speech facts.
 
     Without ``hook_text`` a debate prompt is generated from the speech and ``topic``
-    (the Twitch category); ``hook_text=""`` renders no headline.
+    (the Twitch category) in ``hook_style`` (see context_text.debate_hook); ``hook_text=""``
+    renders no headline. ``details["hook_method"]`` says which kind of hook was shown.
     """
     ffmpeg = ffmpeg_binary()
     audio = working / "speech.wav"
@@ -92,7 +94,7 @@ def render(
     matches = (getattr(transcriber, "language", None) == language
                and (getattr(transcriber, "language_probability", None) or 0) >= 0.7)
     hook = (debate_hook(" ".join(w.text for w in words), topic, hook_key or streamer, quote=matches,
-                        language=language)
+                        language=language, style=hook_style)
             if hook_text is None else manual_hook(hook_text))
     if settings.renderer == "remotion":
         from .remotion_render import render_polished
@@ -148,6 +150,7 @@ def render(
             last_word_s=round(words[-1].end, 2) if words else None,
             language=getattr(transcriber, "language", None) if words else None,
             language_probability=getattr(transcriber, "language_probability", None) if words else None,
+            hook_method=hook.method,
         )
     logging.info("Rendered %s: transcribe %.1fs, encode %.1fs", target.name,
                  transcribed - began, encoded - transcribed)

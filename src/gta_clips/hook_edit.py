@@ -24,7 +24,10 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
     topic = burst[0] if burst else config.twitch.game_name
     account = config.account(clip.get('account'))
     language = (account.language if account else '') or 'en'
-    hook = debate_hook(clip['transcript'], topic, clip_id, language=language) if text is None else manual_hook(text)
+    # A clip in the hook test keeps the style it was given (see hook_styles.py).
+    style = clip.get('hook_style') or 'quote'
+    hook = (debate_hook(clip['transcript'], topic, clip_id, language=language, style=style)
+            if text is None else manual_hook(text))
     if suggest_only:
         print(' '.join(filter(None, (hook.label, hook.text))) or '(No hook)')
         return hook
@@ -43,14 +46,15 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
         source = download_vod(f"https://www.twitch.tv/videos/{clip['vod_id']}", work,
                               section=(start - padding, start + duration + 3), max_height=720)
         try:
+            details = {}
             render(source, work, target, Moment(padding, duration, 0), clip['streamer'],
                    replace(config.editing, layout='fit'),
-                   Transcriber(config.editing.whisper_model), hook_text=text, topic=topic, hook_key=clip_id,
-                   language=language)
+                   Transcriber(config.editing.whisper_model), details, hook_text=text, topic=topic,
+                   hook_key=clip_id, language=language, hook_style=style)
             with connect(config.paths.database) as db:
-                updated = db.execute("""UPDATE clips SET path=? WHERE id=? AND path=? AND state='pending'
+                updated = db.execute("""UPDATE clips SET path=?, hook_method=? WHERE id=? AND path=? AND state='pending'
                     AND NOT EXISTS (SELECT 1 FROM uploads WHERE clip_id=clips.id)""",
-                    (relative.as_posix(), clip_id, clip['path']))
+                    (relative.as_posix(), details.get('hook_method', hook.method), clip_id, clip['path']))
                 if updated.rowcount != 1:
                     raise ValueError('Clip changed or was approved while rendering; original kept')
         except BaseException:
