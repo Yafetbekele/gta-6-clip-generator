@@ -53,6 +53,20 @@ class TrackingExportTests(unittest.TestCase):
             self.assertNotIn('<b>5,000</b>', page)
             self.assertIn('<b>120</b>', page)
 
+    def test_same_reel_from_publisher_and_browser_is_counted_once(self):
+        from gta_clips.view_tracking import merge_same_reel
+        rows = merge_same_reel([
+            {'platform': 'instagram', 'video_id': '1815', 'clip_id': 'c1', 'url': 'https://www.instagram.com/reel/AbC/',
+             'views': 150, 'likes': 2, 'fetched': 10},
+            {'platform': 'instagram', 'video_id': 'AbC', 'clip_id': None, 'url': 'https://www.instagram.com/me/reel/AbC/',
+             'views': 160, 'likes': None, 'fetched': 20},
+            {'platform': 'instagram', 'video_id': 'Other', 'clip_id': None, 'url': 'https://www.instagram.com/me/reel/Other/',
+             'views': 5, 'fetched': 20},
+        ])
+        self.assertEqual(len(rows), 2)
+        kept = next(r for r in rows if r['video_id'] == '1815')
+        self.assertEqual((kept['clip_id'], kept['views'], kept['likes']), ('c1', 160, 2))
+
     def test_empty_install_report_does_not_invent_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = Path(directory) / 'browser-upload.json'

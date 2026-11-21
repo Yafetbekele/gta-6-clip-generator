@@ -310,6 +310,11 @@ def fetch_instagram(config: Config, now: float | None = None) -> dict:
                     db.execute("INSERT OR IGNORE INTO posts(platform, video_id, account, url, source) "
                                "VALUES ('instagram', ?, ?, ?, 'instagram-api')",
                                (video_id, account, item.get("permalink", "")))
+                elif item.get("permalink"):
+                    # Publisher posts have no link; the permalink lets reports join them to the
+                    # browser collector's row for the same Reel.
+                    db.execute("UPDATE posts SET url=? WHERE platform='instagram' AND video_id=? AND COALESCE(url, '')=''",
+                               (item["permalink"], video_id))
                 db.execute("""INSERT OR REPLACE INTO post_stats(platform, video_id, fetched, published, views,
                                   likes, comments, shares)
                               VALUES ('instagram', ?, ?, ?, ?, ?, ?, ?)""",

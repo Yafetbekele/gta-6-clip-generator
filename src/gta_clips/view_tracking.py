@@ -43,6 +43,39 @@ def banned_platforms(options):
             for platform in account.get('banned', []) if isinstance(platform, str)}
 
 
+def reel_code(url):
+    """The shortcode in an Instagram post link, or None."""
+    import re
+    match = re.search(r'instagram\.com/(?:[\w.]+/)?(?:reel|reels|p)/([\w-]+)', url or '')
+    return match.group(1) if match else None
+
+
+def merge_same_reel(rows):
+    """One row per Instagram Reel when the publisher and the browser collector both recorded it.
+
+    The row with a clip (the publisher's) is kept; it takes the newer numbers of the two.
+    """
+    groups = {}
+    for row in rows:
+        code = reel_code(row.get('url')) if row.get('platform') == 'instagram' else None
+        groups.setdefault(code or id(row), []).append(row)
+    merged = []
+    for group in groups.values():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        keep = dict(max(group, key=lambda r: (r.get('clip_id') is not None, r.get('likes') is not None)))
+        newest = max(group, key=lambda r: r.get('fetched') or 0)
+        for key in ('views', 'likes', 'comments', 'shares'):
+            if newest.get(key) is not None and (newest.get('fetched') or 0) >= (keep.get('fetched') or 0):
+                keep[key] = newest[key]
+            elif keep.get(key) is None:
+                keep[key] = next((r[key] for r in group if r.get(key) is not None), None)
+        keep['fetched'] = newest.get('fetched')
+        merged.append(keep)
+    return merged
+
+
 def cell(value):
     return escape(str(value)) if value is not None else '—'
 
@@ -257,6 +290,7 @@ def export_tracking(settings):
         merged = [{**post, **latest.get((post['platform'], post['video_id']), {}),
                    'privacy': observed.get((post['platform'], post['video_id']), {}).get('privacy'),
                    'post_status': observed.get((post['platform'], post['video_id']), {}).get('status')} for post in posts]
+        merged = merge_same_reel(merged)
         for name, rows in [('posts', merged), ('view-history', history), ('clip-features', features), ('upload-history', attempts)]:
             write_file(folder / (name + '.json'), json.dumps(rows, indent=2, ensure_ascii=False))
         write_file(folder / 'collection-status.json', json.dumps(checks, indent=2))
