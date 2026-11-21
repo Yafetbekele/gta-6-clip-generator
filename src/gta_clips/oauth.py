@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 import json
 import os
+import re
 import secrets
 import time
 import webbrowser
@@ -19,7 +20,10 @@ from .db import connect
 
 GOOGLE_TOKEN = "https://oauth2.googleapis.com/token"
 TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/"
-INSTAGRAM_GRAPH = "https://graph.instagram.com"
+# Instagram publishing goes through Meta's Unified login (Facebook Login for Business). New Meta
+# apps cannot use "API setup with Instagram login", so tokens come from the app dashboard instead.
+INSTAGRAM_GRAPH = "https://graph.facebook.com"
+INSTAGRAM_DEFAULT_VERSION = "v25.0"
 TWITCH_TOKEN = "https://id.twitch.tv/oauth2/token"
 GOOGLE_SCOPES = ("https://www.googleapis.com/auth/youtube.upload",
                  "https://www.googleapis.com/auth/youtube.readonly",
@@ -155,7 +159,47 @@ def _twitch_authorize(state: str) -> dict:
     })
 
 
-def authorize(path: Path, platform: str, account: str | None = None):
+def instagram_version() -> str:
+    version = os.getenv("INSTAGRAM_GRAPH_VERSION") or INSTAGRAM_DEFAULT_VERSION
+    if not re.fullmatch(r"v\d+\.\d+", version):
+        raise ValueError("INSTAGRAM_GRAPH_VERSION must look like v25.0")
+    return version
+
+
+def _instagram_token(expected_handle: str | None) -> dict:
+    """A long-lived token pasted from the Meta app dashboard (Unified login), checked before saving.
+
+    The dashboard's "Generate token" button gives a token tied to one Instagram professional
+    account. It is not refreshed with ig_refresh_token; when Meta stops accepting it, generate a
+    new one in the dashboard and run this again.
+    """
+    account_id = input("Instagram account ID from the Meta app dashboard (digits): ").strip()
+    if not account_id.isdecimal():
+        raise ValueError("The Instagram account ID is the long number under the account name")
+    secret = getpass("Paste the token from Generate token (hidden), then Enter: ").strip()
+    if not secret:
+        raise ValueError("No token was pasted")
+    base = f"{INSTAGRAM_GRAPH}/{instagram_version()}"
+    response = requests.get(f"{base}/{account_id}", params={"fields": "id,username", "access_token": secret},
+                            timeout=30)
+    if not response.ok:
+        code = response.json().get("error", {}).get("code") if response.content else None
+        raise RuntimeError(f"Meta did not accept that token for account {account_id} "
+                           f"(HTTP {response.status_code}, error {code})")
+    username = response.json().get("username", "")
+    if expected_handle and username.casefold() != expected_handle.lstrip("@").casefold():
+        raise RuntimeError(f"That token belongs to @{username}, not @{expected_handle.lstrip('@')}")
+    limit = requests.get(f"{base}/{account_id}/content_publishing_limit",
+                         params={"fields": "quota_usage", "access_token": secret}, timeout=30)
+    if not limit.ok:
+        raise RuntimeError(f"That token cannot read the publishing limit (HTTP {limit.status_code}); "
+                           "check instagram_content_publish in the login configuration")
+    print(f"Token works for @{username}.")
+    return {"access_token": secret, "user_id": account_id, "username": username,
+            "login": "unified", "expires_in": 10 * 365 * 86400}
+
+
+def authorize(path: Path, platform: str, account: str | None = None, expected_handle: str | None = None):
     if account and platform == "twitch":
         raise ValueError("Twitch chat uses one login for every account set")
     state = secrets.token_urlsafe(32)
@@ -163,33 +207,25 @@ def authorize(path: Path, platform: str, account: str | None = None):
         token = _google_authorize(state)
     elif platform == "twitch":
         token = _twitch_authorize(state)
+    elif platform == "instagram":
+        token = _instagram_token(expected_handle)
     else:
-        prefix = platform.upper()
-        client_id = env("TIKTOK_CLIENT_KEY" if platform == "tiktok" else "INSTAGRAM_CLIENT_ID")
-        secret = env(f"{prefix}_CLIENT_SECRET")
-        redirect = env(f"{prefix}_REDIRECT_URI")
+        client_id = env("TIKTOK_CLIENT_KEY")
+        secret = env("TIKTOK_CLIENT_SECRET")
+        redirect = env("TIKTOK_REDIRECT_URI")
         destination = urlsplit(redirect)
         if destination.scheme != "https" or not destination.hostname or destination.query or destination.fragment:
-            raise ValueError(f"{prefix}_REDIRECT_URI must be an HTTPS callback URL without a query or fragment")
-        instagram = platform == "instagram"
-        key = "client_id" if instagram else "client_key"
-        host = "https://www.instagram.com/oauth/authorize" if instagram else "https://www.tiktok.com/v2/auth/authorize/"
-        scope = "instagram_business_basic,instagram_business_content_publishing" if instagram else "video.upload"
-        query = {key: client_id, "redirect_uri": redirect, "response_type": "code", "scope": scope, "state": state}
-        if instagram:
-            query["enable_fb_login"] = "0"
-        print(f"Open this URL to authorize {platform}:\n{host}?{urlencode(query)}")
+            raise ValueError("TIKTOK_REDIRECT_URI must be an HTTPS callback URL without a query or fragment")
+        query = {"client_key": client_id, "redirect_uri": redirect, "response_type": "code",
+                 "scope": "video.upload", "state": state}
+        url = f"https://www.tiktok.com/v2/auth/authorize/?{urlencode(query)}"
+        print(f"Open this URL to authorize {platform}:\n{url}")
         callback = getpass("Paste the complete URL from the callback address bar: ").strip()
         code = _verify_callback(callback, redirect, state)["code"][0]
-        token = _token_request("https://api.instagram.com/oauth/access_token" if instagram else TIKTOK_TOKEN, {
-            key: client_id, "client_secret": secret, "redirect_uri": redirect,
+        token = _token_request(TIKTOK_TOKEN, {
+            "client_key": client_id, "client_secret": secret, "redirect_uri": redirect,
             "grant_type": "authorization_code", "code": code,
         })
-        if instagram:
-            token = {**token, **_token_request(f"{INSTAGRAM_GRAPH}/access_token", {
-                "grant_type": "ig_exchange_token", "client_secret": secret,
-                "access_token": token["access_token"],
-            }, "GET")}
     _save_token(path, token_key(platform, account), {**token, "authorization_id": secrets.token_hex(16)})
     where = f" for account set {account}" if account else ""
     print(f"Authorized {platform}{where}. Tokens are stored in the local database.")
@@ -209,12 +245,11 @@ def access_token(path: Path, platform: str, account: str | None = None) -> tuple
         option = f" --account {account}" if account else ""
         raise RuntimeError(f"Run gta-clips auth {platform}{option} first")
     token = json.loads(saved["token"])
-    if token["expires_at"] <= time.time() + (86400 * 5 if platform == "instagram" else 120):
-        if platform == "instagram":
-            new = _token_request(f"{INSTAGRAM_GRAPH}/refresh_access_token", {
-                "grant_type": "ig_refresh_token", "access_token": token["access_token"],
-            }, "GET")
-        elif platform == "twitch":
+    if platform == "instagram":
+        # Unified login tokens cannot be refreshed here; Meta's error on use says when to paste a new one.
+        return token["access_token"], token
+    if token["expires_at"] <= time.time() + 120:
+        if platform == "twitch":
             new = _token_request(TWITCH_TOKEN, {
                 "client_id": env("TWITCH_CLIENT_ID"), "client_secret": env("TWITCH_CLIENT_SECRET"),
                 "grant_type": "refresh_token", "refresh_token": token["refresh_token"],

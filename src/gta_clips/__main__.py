@@ -228,7 +228,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 names = ", ".join(account.name for account in config.accounts) or "none configured"
                 parser.exit(2, f"No account set named {args.account} (account sets: {names})\n")
             with worker_lock(config.paths.data_dir, name):
-                authorize(config.paths.database, args.platform, args.account)
+                chosen = config.account(args.account) if args.account else None
+                handle = getattr(chosen, "instagram", "") if args.platform == "instagram" else ""
+                authorize(config.paths.database, args.platform, args.account, handle or None)
         elif args.command == "retry":
             from .scheduler import retry_failed
             retry_failed(config, args.platform, args.clip_id)

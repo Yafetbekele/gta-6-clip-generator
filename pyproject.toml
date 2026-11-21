@@ -19,7 +19,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instagram = ["boto3>=1.36,<2"]
 browser = ["playwright>=1.56,<2"]
 
 [project.scripts]
