@@ -166,6 +166,19 @@ def _youtube_get(url: str, token: str, params: dict) -> dict:
     return response.json()
 
 
+def restrictions(details: dict) -> dict:
+    """What a video's ``contentDetails`` says YouTube limited: an age restriction, and countries blocked.
+
+    A Content ID claim on music shows up as ``regionRestriction`` only when the owner blocks some
+    countries; a claim that just takes the ad money leaves no trace here.
+    """
+    region = details.get("regionRestriction") or {}
+    return {"age_restricted": int(details.get("contentRating", {}).get("ytRating") == "ytAgeRestricted"),
+            # An "allowed" list blocks everywhere else; count it as blocked in all but those.
+            "blocked_countries": len(region.get("blocked", [])) or (249 - len(region["allowed"])
+                                                                    if "allowed" in region else 0)}
+
+
 def fetch_youtube(config: Config, now: float | None = None) -> dict:
     """Views, likes and comments for every YouTube post, plus watch time where analytics allow it."""
     now = time.time() if now is None else now
@@ -186,7 +199,7 @@ def fetch_youtube(config: Config, now: float | None = None) -> dict:
         numbers: dict[str, dict] = {}
         try:
             for index in range(0, len(videos), 50):
-                data = _youtube_get(YOUTUBE_VIDEOS, token, {"part": "statistics,snippet",
+                data = _youtube_get(YOUTUBE_VIDEOS, token, {"part": "statistics,snippet,contentDetails",
                                                            "id": ",".join(videos[index:index + 50])})
                 for item in data.get("items", []):
                     stats = item.get("statistics", {})
@@ -194,7 +207,8 @@ def fetch_youtube(config: Config, now: float | None = None) -> dict:
                     numbers[item["id"]] = {"published": published.timestamp(),
                                            "views": _int(stats.get("viewCount")),
                                            "likes": _int(stats.get("likeCount")),
-                                           "comments": _int(stats.get("commentCount"))}
+                                           "comments": _int(stats.get("commentCount")),
+                                           **restrictions(item.get("contentDetails", {}))}
         except PermissionError:
             # Logins made before the read-only scopes were added can only upload.
             result["missing_login"].add(account)
@@ -218,11 +232,13 @@ def fetch_youtube(config: Config, now: float | None = None) -> dict:
         with connect(config.paths.database) as db:
             for video_id, entry in numbers.items():
                 db.execute("""INSERT OR REPLACE INTO post_stats(platform, video_id, fetched, published, views,
-                                  likes, comments, shares, avg_view_seconds, avg_view_percent, subscribers_gained)
-                              VALUES ('youtube', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                  likes, comments, shares, avg_view_seconds, avg_view_percent, subscribers_gained,
+                                  age_restricted, blocked_countries)
+                              VALUES ('youtube', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                            (video_id, int(now), entry["published"], entry["views"], entry["likes"],
                             entry["comments"], entry.get("shares"), entry.get("avg_view_seconds"),
-                            entry.get("avg_view_percent"), entry.get("subscribers_gained")))
+                            entry.get("avg_view_percent"), entry.get("subscribers_gained"),
+                            entry["age_restricted"], entry["blocked_countries"]))
                 result["fetched"] += 1
     return result
 

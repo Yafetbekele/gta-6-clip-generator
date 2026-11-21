@@ -181,6 +181,9 @@ MIGRATIONS = [
     # The hook style a clip was given by the hook test (see hook_styles.py; empty when the test was
     # off) and the kind of hook actually shown: a ContextHook method such as debate_quote_v1.
     ((("clips", "hook_style", "TEXT"), ("clips", "hook_method", "TEXT")), ""),
+    # What YouTube did to each post when it was read: age-restricted (1/0), and how many countries a
+    # claim blocks it in. Empty for snapshots from before this was read, and for other platforms.
+    ((("post_stats", "age_restricted", "INTEGER"), ("post_stats", "blocked_countries", "INTEGER")), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

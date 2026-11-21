@@ -10,10 +10,12 @@ import logging
 import random
 import re
 import shutil
+import sqlite3
 import time
 
 from .config import Config
 from .db import connect
+from .metadata import clean_title
 from .view_model import Model, clip_features, train
 
 FOLDER = "ready-to-post"
@@ -148,3 +150,45 @@ def cleanup(config: Config, keep_days: int = 7):
     for folder in root.iterdir():
         if folder.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", folder.name) and folder.name < oldest:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+def _not_retitled(config: Config) -> set[str]:
+    """Clips whose title must stay: already on YouTube, or mid-upload or held anywhere."""
+    keep = set()
+    ledger = config.paths.data_dir / "browser-upload" / "posts.sqlite3"
+    if ledger.is_file():
+        source = sqlite3.connect(f"file:{ledger.as_posix()}?mode=ro", uri=True)
+        try:
+            keep |= {row[0] for row in source.execute(
+                "SELECT clip_id FROM posts WHERE platform='youtube' OR state NOT IN ('posted', 'under_review')")}
+        finally:
+            source.close()
+    with connect(config.paths.database) as db:
+        keep |= {row[0] for row in db.execute(
+            """SELECT clip_id FROM posts WHERE platform='youtube' AND clip_id IS NOT NULL
+               UNION SELECT clip_id FROM uploads WHERE platform='youtube' OR state != 'queued'""")}
+    return keep
+
+
+def retitle_explicit(config: Config) -> int:
+    """Pick a clean title for clips made before titles skipped swearing, unless already on YouTube.
+
+    YouTube age-restricted some clips whose titles swore. Clips already posted there keep their
+    title so the record matches what is public; the .txt notes pick up the change in `rewrite_notes`.
+    """
+    keep = _not_retitled(config)
+    changed = 0
+    with connect(config.paths.database) as db:
+        rows = db.execute("""SELECT c.id, c.title, c.description, c.transcript,
+                                    COALESCE(b.game_name, 'Gameplay') AS game
+                             FROM clips c LEFT JOIN live_bursts b ON b.clip_id = c.id""").fetchall()
+        for row in rows:
+            if row["id"] in keep:
+                continue
+            cleaned = clean_title(row["title"], row["description"], row["transcript"], row["game"])
+            if cleaned and cleaned != (row["title"], row["description"]):
+                db.execute("UPDATE clips SET title=?, description=? WHERE id=?", (*cleaned, row["id"]))
+                changed += 1
+    if changed:
+        logging.info("Gave %d clips a title without swearing", changed)
+    return changed

@@ -29,6 +29,11 @@ def headline_from_transcript(words: str, fallback: str) -> str:
     return fallback
 
 
+def mask_explicit(text: str) -> str:
+    """Keep each explicit word's first letter and star out the rest, for text shown on screen."""
+    return EXPLICIT.sub(lambda match: match.group(0)[0] + "*" * (len(match.group(0)) - 1), text)
+
+
 def attribution(streamer: str) -> str:
     return f"@{streamer} on Twitch\nhttps://www.twitch.tv/{streamer}"
 
@@ -58,3 +63,24 @@ def generate(transcript: str, game: str, streamer: str, vod_id: str, start: int)
         tags += [theme for keyword, theme in GAME_THEMES.items() if keyword in tokens][:2]
     tags = " ".join(tags)
     return Metadata(title, description, tags)
+
+
+def clean_title(title: str, description: str, transcript: str, game: str) -> tuple[str, str] | None:
+    """A new (title, description) for a clip whose title has an explicit word, or None if it has none.
+
+    Titles made before the explicit-word filter can quote a sentence with swearing. This picks the
+    headline again the way `generate` does now; the rest of the description stays as it was.
+    """
+    if not EXPLICIT.search(title):
+        return None
+    headline_part, _, streamer = title.rpartition(" | @")
+    suffix = f" | @{streamer}" if headline_part else ""
+    words = " ".join(transcript.replace("<", "‹").replace(">", "›").split())
+    fallback = f"{game} highlight"
+    headline = headline_from_transcript(words, fallback)
+    new_title = _excerpt(headline, 100 - len(suffix)) + suffix
+    # `generate` puts the headline as the first paragraph unless the description starts with credit.
+    first, separator, rest = description.partition("\n\n")
+    body = rest if separator and not first.startswith("@") else description
+    new_description = f"{_excerpt(headline, 240)}\n\n{body}" if headline != fallback else body
+    return new_title, new_description

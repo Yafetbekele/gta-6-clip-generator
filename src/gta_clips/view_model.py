@@ -287,6 +287,27 @@ def hook_results(db) -> dict:
             for platform, labels in sorted(groups.items())}
 
 
+def restriction_results(db) -> dict:
+    """YouTube posts per streamer, and how many YouTube last reported as age-restricted or region-blocked.
+
+    Counts only, from the latest read of each post; nothing here decides which clips get made.
+    """
+    rows = db.execute("""SELECT COALESCE(c.streamer, '?') AS streamer, s.age_restricted, s.blocked_countries
+                         FROM post_stats s JOIN posts p USING (platform, video_id)
+                         LEFT JOIN clips c ON c.id = p.clip_id
+                         WHERE s.platform = 'youtube' AND s.age_restricted IS NOT NULL
+                           AND s.fetched = (SELECT MAX(fetched) FROM post_stats l WHERE l.platform = s.platform
+                                            AND l.video_id = s.video_id AND l.age_restricted IS NOT NULL)""")
+    found: dict[str, dict[str, int]] = {}
+    for row in rows:
+        entry = found.setdefault(row["streamer"], {"posts": 0, "age_restricted": 0, "region_blocked": 0})
+        entry["posts"] += 1
+        entry["age_restricted"] += bool(row["age_restricted"])
+        entry["region_blocked"] += bool(row["blocked_countries"])
+    return dict(sorted(found.items(), key=lambda item: (-item[1]["age_restricted"] - item[1]["region_blocked"],
+                                                        item[0])))
+
+
 def train(config: Config, now: float | None = None) -> Model | None:
     """Fit on every qualifying post, save a readable summary, or return None if there are too few."""
     now = time.time() if now is None else now
@@ -294,6 +315,7 @@ def train(config: Config, now: float | None = None) -> Model | None:
         rows, values = training_rows(db, now)
         checked = check(db)
         report = {"predictions_checked": checked, "cut_test": cut_results(db), "hook_test": hook_results(db),
+                  "youtube_restrictions": restriction_results(db),
                   "test_note": "Each group needs about 30 posts before its median means much."}
     path = config.paths.data_dir / SUMMARY
     if len(rows) < MIN_POSTS:

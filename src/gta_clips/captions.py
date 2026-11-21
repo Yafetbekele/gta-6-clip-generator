@@ -6,6 +6,8 @@ import wave
 
 import numpy as np
 
+from .metadata import mask_explicit
+
 
 @dataclass(frozen=True)
 class Word:
@@ -50,6 +52,14 @@ def _escape(text: str) -> str:
     return " ".join(text.translate(str.maketrans({"\\": "＼", "{": "｛", "}": "｝"})).split())
 
 
+def _shown(text: str) -> str:
+    """Spoken words and hook text as burned in: swearing is starred out (see metadata.EXPLICIT).
+
+    YouTube age-restricted clips whose captions or titles swore; the audio itself is unchanged.
+    """
+    return _escape(mask_explicit(text))
+
+
 def write_ass(path: Path, words: list[Word], streamer: str, duration: float, hook=None,
               hook_bottom: int | None = None):
     """``hook`` is a ContextHook headline for the whole clip, its last line ending at ``hook_bottom``."""
@@ -72,12 +82,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     total = round(duration * 100)
     events = [f"Dialogue: 0,0:00:00.00,{_time(total)},Credit,,0,0,0,,@{_escape(streamer)} on Twitch"]
     if hook is not None and hook.text:
-        text = _escape(hook.text)
+        text = _shown(hook.text)
         if hook.method.endswith("quote_v1"):
             text = f"“{text}”"
         if hook.label:
             # The label sits on its own line in the accent colour, above the take itself.
-            text = r"{\fs46\c&H0058FFC4&}" + _escape(hook.label) + r"{\r}\N" + text
+            text = r"{\fs46\c&H0058FFC4&}" + _shown(hook.label) + r"{\r}\N" + text
         if hook_bottom:
             text = rf"{{\an2\pos(540,{hook_bottom})}}" + text
         events.append(f"Dialogue: 1,0:00:00.00,{_time(total)},Hook,,0,0,0,,{text}")
@@ -98,8 +108,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             end = min(total, next_start, max(start + 1, round(word.end * 100)))
             if end <= start:
                 continue
-            text = " ".join(r"{\c&H004DDFFF&}" + _escape(item.text) + r"{\r}"
-                            if position == index else _escape(item.text)
+            text = " ".join(r"{\c&H004DDFFF&}" + _shown(item.text) + r"{\r}"
+                            if position == index else _shown(item.text)
                             for position, item in enumerate(group))
             events.append(f"Dialogue: 0,{_time(start)},{_time(end)},Caption,,0,0,0,,{text}")
     path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")

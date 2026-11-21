@@ -197,8 +197,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 live_status(config)
             return 0
         if args.command == "ready":
-            from .ready import cleanup, export_due, rewrite_notes
+            from .ready import cleanup, export_due, retitle_explicit, rewrite_notes
             with worker_lock(config.paths.data_dir, "ready"):
+                retitle_explicit(config)
                 added = export_due(config)
                 rewrite_notes(config)
                 cleanup(config)
