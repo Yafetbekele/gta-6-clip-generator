@@ -65,9 +65,18 @@ stats_every_minutes = 60
 [editing]
 renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Requires layout="fit".
 layout = "fit"
+# Whisper model for captions. "large-v3-turbo" on the GPU (2-5 s a clip) is far more accurate than
+# "base", which dropped whole sentences; on the CPU use "base" or "small". The GPU needs the
+# nvidia-cublas-cu12 and nvidia-cudnn-cu12 pip packages.
 whisper_model = "base"
+# "auto" uses the GPU when it works and falls back to the CPU; or "cuda" / "cpu".
+whisper_device = "auto"
+# Skip moments where the streamer mostly talks to chat: giveaways, polls, thanking subs (see chat_talk.py).
+skip_chat_talk = true
 # test_hooks = true # Give each clip a random kind of hook box to compare their views (see hook_styles.py).
 # filler = "test" # Background gameplay under the stream: "off", "test" (random kind or none per clip) or "on".
+# trim_dead_time = "test" # Cut quiet pauses: "off", "test" (half the clips, see trim.py) or "on".
+# test_captions = true # Give each clip a random caption style to compare their views (see caption_styles.py).
 
 # To enable a split layout for a channel, replace "streamer_login" and
 # adjust [x, y, width, height] as fractions of its source video frame.
@@ -96,9 +105,9 @@ min_spacing_minutes = 120
 # [[accounts]]
 # name = "gta6-1"          # lowercase letters, digits and dashes; also the folder name
 # label = "GTA 6 #1"       # optional display name
-# category = "Grand Theft Auto VI"
+# category = "Grand Theft Auto VI"   # or a list, such as ["Just Chatting", "Grand Theft Auto VI"]
 # language = "en"          # Twitch stream language; leave out for any language
-# channels = 5             # live channels this set adds to the watch list (1 to 20)
+# channels = 5             # live channels this set adds per category (1 to 20)
 # youtube = "GTA 6 Clips"  # optional: where to post this set's clips by hand, shown in
 # tiktok = "gta_clips"     #   each ready-to-post .txt file (names only, never passwords)
 # instagram = "gta_clips"

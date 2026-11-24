@@ -21,9 +21,11 @@ from .db import INSERT_CLIP, WorkerBusy, connect, worker_lock
 from .diagnostics import describe
 from .discovery import Twitch, _duration, _timestamp
 from .download import VodUnavailable, download_vod
-from .editing import max_source_height, render
+from .editing import SkippedMoment, max_source_height, render
 from . import filler as fillers
 from . import hook_styles
+from . import trim as trims
+from . import caption_styles
 from .highlights import Moment
 from .metadata import generate
 
@@ -68,6 +70,7 @@ def retry_delay(attempts: int) -> int:
 class RenderContext:
     """Expensive objects kept between batches in one worker: Whisper models and an app token."""
     model: str
+    device: str = "auto"
     twitch: Twitch | None = None
     # One Transcriber per clip rendering at the same time; each keeps its own language result.
     transcribers: SimpleQueue = field(default_factory=SimpleQueue)
@@ -84,7 +87,7 @@ class RenderContext:
         try:
             transcriber = self.transcribers.get_nowait()
         except Empty:
-            transcriber = Transcriber(self.model)
+            transcriber = Transcriber(self.model, self.device)
         try:
             yield transcriber
         finally:
@@ -111,6 +114,14 @@ def _failed_attempt(config: Config, burst, error: BaseException):
              f"Attempt {attempts} failed; retrying in {delay // 60} min", burst["stream_id"], burst["anchor"]),
         )
     logging.warning("Live clip from %s delayed after attempt %s: %s", burst["streamer"], attempts, summary)
+
+
+def _skip(config: Config, burst, reason: str):
+    """Record that a burst's moment was not worth a clip (see chat_talk.py); it is never retried."""
+    with connect(config.paths.database) as db:
+        db.execute("UPDATE live_bursts SET state='skipped', detail=? WHERE stream_id=? AND anchor=?",
+                   (reason[:300], burst["stream_id"], burst["anchor"]))
+    logging.info("Skipped a live clip from %s: %s", burst["streamer"], reason)
 
 
 def mark_unclippable(config: Config, burst, reason: str):
@@ -144,6 +155,8 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
     cut_before, cut_after = _cut(config, burst)
     hook_style = hook_styles.choose(clip_id, config.editing.test_hooks)
     filler_kind = fillers.choose(clip_id, config.editing.filler, config.paths.data_dir)
+    trim_choice = trims.choose(clip_id, config.editing.trim_dead_time)
+    caption_style = caption_styles.choose(clip_id, config.editing.test_captions)
     length = cut_before + cut_after
     before = min(PAD, start)
     section = (start - before, min(vod_duration, start + length + PAD))
@@ -155,12 +168,21 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
         downloaded = time.monotonic()
         details = {}
         # render() cuts the exact window and rejects a section that is still too short.
-        transcript = render(source, working, config.paths.data_dir / relative,
-                            Moment(before, length, burst["messages"]), burst["streamer"],
-                            config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id,
-                            language=(account.language if account else "") or "en",
-                            hook_style=hook_style or hook_styles.STANDARD,
-                            filler=fillers.pick(clip_id, filler_kind, config.paths.data_dir, length))
+        try:
+            transcript = render(source, working, config.paths.data_dir / relative,
+                                Moment(before, length, burst["messages"]), burst["streamer"],
+                                config.editing, transcriber, details, topic=burst["game_name"], hook_key=clip_id,
+                                language=(account.language if account else "") or "en",
+                                hook_style=hook_style or hook_styles.STANDARD,
+                                filler=fillers.pick(clip_id, filler_kind, config.paths.data_dir, length),
+                                trim=trim_choice == trims.TRIM,
+                                protect=(cut_before - trims.PROTECT, cut_before + trims.PROTECT),
+                                caption_style=caption_style or caption_styles.STANDARD,
+                                skip_chat_talk=config.editing.skip_chat_talk, burst=float(cut_before),
+                                section_length=section[1] - section[0])
+        except SkippedMoment as skipped:
+            _skip(config, burst, str(skipped))
+            return
         metadata = generate(transcript, burst["game_name"], burst["streamer"], vod_id, start)
         with connect(config.paths.database) as db:
             db.execute("INSERT OR IGNORE INTO vods(id, streamer, status) VALUES (?, ?, 'live-window')",
@@ -168,9 +190,10 @@ def _render(config: Config, transcriber: Transcriber, burst, vod_id: str, start:
             db.execute(INSERT_CLIP, (clip_id, vod_id, burst["streamer"], relative.as_posix(), start,
                                     length, transcript, metadata.title, metadata.description, metadata.hashtags))
             db.execute("""UPDATE clips SET account=?, cut_before=?, cut_after=?, hook_style=?, hook_method=?,
-                              filler=? WHERE id=?""",
+                              filler=?, trim=?, trimmed_s=?, trimmed_before_s=?, caption_style=? WHERE id=?""",
                        (account.name if account else None, cut_before, cut_after, hook_style,
-                        details.get("hook_method"), filler_kind, clip_id))
+                        details.get("hook_method"), filler_kind, trim_choice, details.get("trimmed_s"),
+                        details.get("trimmed_before_s"), caption_style, clip_id))
             db.execute(
                 """INSERT OR REPLACE INTO clip_features(clip_id, source, speech_seconds, word_count,
                        language, language_probability, first_word_s, last_word_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -199,7 +222,7 @@ def render_due(config: Config, stop: Event | None = None, context: RenderContext
     """Process a short batch. A separate lock lets a standalone worker resume saved jobs."""
     try:
         with worker_lock(config.paths.data_dir, "render-live"):
-            _process_due(config, stop, context or RenderContext(config.editing.whisper_model))
+            _process_due(config, stop, context or RenderContext(config.editing.whisper_model, config.editing.whisper_device))
     except WorkerBusy:
         return
 

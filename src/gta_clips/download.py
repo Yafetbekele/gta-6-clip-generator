@@ -45,9 +45,10 @@ def download_vod(url: str, directory: Path, *, section: tuple[float, float] | No
                  max_height: int | None = None) -> Path:
     """Fetch a VOD or one section of it.
 
-    A section is copied without re-encoding. FFmpeg's input seek makes time 0 of the file match
-    ``section[0]`` on the VOD, so callers should request a few seconds of padding and trim
-    exactly while rendering, which re-encodes anyway.
+    A section is copied without re-encoding. On a finished VOD time 0 of the file is ``section[0]``.
+    While the VOD is still live, yt-dlp cuts at the HLS segment (10 s) boundary, so the file can
+    start up to 10 s early; its end is still right, so the file is that much longer than the
+    section. Pass the section's length to editing.render, which shifts the cut to match.
     """
     options = [] if section is None else ["--download-sections", f"*{section[0]}-{section[1]}"]
     command = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-playlist",

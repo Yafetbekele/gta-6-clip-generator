@@ -11,9 +11,11 @@ from .db import INSERT_CLIP, connect, worker_lock
 from .diagnostics import describe
 from .discovery import Twitch, Vod
 from .download import VodUnavailable, download_vod, replay_chat
-from .editing import max_source_height, probe_duration, render
+from .editing import SkippedMoment, max_source_height, probe_duration, render
 from . import filler as fillers
 from . import hook_styles
+from . import trim as trims
+from . import caption_styles
 from .highlights import audio_levels, rank_moments, video_activity
 from .metadata import generate
 
@@ -51,18 +53,28 @@ def _process(config: Config, twitch: Twitch, vod: Vod, transcriber: Transcriber)
             details = {}
             hook_style = hook_styles.choose(clip_id, config.editing.test_hooks)
             filler_kind = fillers.choose(clip_id, config.editing.filler, base)
-            transcript = render(source, clip_dir, base / relative, moment, vod.streamer,
-                                config.editing, transcriber, details, topic=config.twitch.game_name,
-                                hook_key=clip_id, hook_style=hook_style or hook_styles.STANDARD,
-                                filler=fillers.pick(clip_id, filler_kind, base, moment.duration))
+            trim_choice = trims.choose(clip_id, config.editing.trim_dead_time)
+            caption_style = caption_styles.choose(clip_id, config.editing.test_captions)
+            try:
+                transcript = render(source, clip_dir, base / relative, moment, vod.streamer,
+                                    config.editing, transcriber, details, topic=config.twitch.game_name,
+                                    hook_key=clip_id, hook_style=hook_style or hook_styles.STANDARD,
+                                    filler=fillers.pick(clip_id, filler_kind, base, moment.duration),
+                                    trim=trim_choice == trims.TRIM,
+                                    caption_style=caption_style or caption_styles.STANDARD,
+                                    skip_chat_talk=config.editing.skip_chat_talk)
+            except SkippedMoment as skipped:
+                logging.info("Skipped moment %s of VOD %s: %s", index, vod.id, skipped)
+                continue
             metadata = generate(transcript, config.twitch.game_name, vod.streamer, vod.id, moment.start)
             # Save each clip as soon as it exists, so a later failure does not discard it.
             with connect(config.paths.database) as db:
                 db.execute(INSERT_CLIP, (clip_id, vod.id, vod.streamer, relative.as_posix(), moment.start,
                                          moment.duration, transcript, metadata.title, metadata.description,
                                          metadata.hashtags))
-                db.execute("UPDATE clips SET hook_style=?, hook_method=?, filler=? WHERE id=?",
-                           (hook_style, details.get("hook_method"), filler_kind, clip_id))
+                db.execute("UPDATE clips SET hook_style=?, hook_method=?, filler=?, trim=?, trimmed_s=?, caption_style=? WHERE id=?",
+                           (hook_style, details.get("hook_method"), filler_kind, trim_choice,
+                            details.get("trimmed_s"), caption_style, clip_id))
                 db.execute(
                     """INSERT OR REPLACE INTO clip_features(clip_id, source, chat_score, audio_score,
                            twitch_clip_score, motion_seconds, total_score, speech_seconds, word_count,
@@ -91,7 +103,7 @@ def ingest(config: Config) -> int:
     failures = 0
     with worker_lock(config.paths.data_dir, "ingest"):
         twitch = Twitch()
-        transcriber = Transcriber(config.editing.whisper_model)
+        transcriber = Transcriber(config.editing.whisper_model, config.editing.whisper_device)
         for vod in twitch.discover(config.twitch):
             with connect(config.paths.database) as db:
                 existing = db.execute("SELECT status, updated, attempts FROM vods WHERE id=?",

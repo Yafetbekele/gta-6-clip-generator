@@ -286,7 +286,7 @@ def pick_account(db, config: Config, feed_key: str) -> str | None:
     marks = ",".join("?" * len(feed.accounts))
     counts = dict(db.execute(
         f"""SELECT account, COUNT(*) FROM live_bursts WHERE account IN ({marks})
-            AND state != 'unavailable' GROUP BY account""", feed.accounts).fetchall())
+            AND state NOT IN ('unavailable', 'skipped') GROUP BY account""", feed.accounts).fetchall())
     return min(feed.accounts, key=lambda name: (counts.get(name, 0), feed.accounts.index(name)))
 
 
@@ -304,6 +304,16 @@ def _active_streams(twitch: Twitch, config: Config, game_id: str, pool: int | No
     """Live channels in the category (and language, for a feed), most viewers first, with their rank."""
     pool = pool or config.live.max_channels
     language = feed.language if feed else ""
+    if feed is not None and feed.streamers:
+        # A streamer account's channels are watched whenever they are live, in any category.
+        rows = twitch.get("streams", {"user_login": list(feed.streamers), "first": 100})["data"]
+        rows.sort(key=lambda row: row["viewer_count"], reverse=True)
+        return [Broadcast(row["id"], row["user_id"], row["user_login"], _timestamp(row["started_at"]).timestamp(),
+                          int(row.get("viewer_count") or 0), rank, row.get("language") or "",
+                          row.get("game_name") or "", feed.key, row.get("title") or "",
+                          ",".join(row.get("tags") or []), bool(row.get("is_mature")))
+                for rank, row in enumerate((row for row in rows
+                                            if row["type"] == "live" and row["id"].isdecimal()), start=1)]
     if config.accounts or config.twitch.all_streamers:
         query = {"game_id": game_id, "first": min(100, pool)}
         if language:
@@ -391,7 +401,8 @@ class StreamRefresher(Thread):
         for feed in self.config.feeds:
             try:
                 pool = min(100, feed.channels + CANDIDATE_EXTRA)
-                found[feed.key] = _active_streams(self.twitch, self.config, self.games[feed.key], pool, feed)
+                found[feed.key] = _active_streams(self.twitch, self.config, self.games.get(feed.key, ""),
+                                                  pool, feed)
             except Exception as error:  # One failing category keeps its last list.
                 errors.append(error)
         with self.lock:
@@ -767,7 +778,7 @@ class WatchStatus:
 def describe_feeds(config: Config) -> str:
     if not config.accounts:
         return config.twitch.game_name
-    names = dict.fromkeys(feed.category for feed in config.feeds)
+    names = dict.fromkeys(feed.label for feed in config.feeds)
     return ", ".join(names)
 
 
@@ -780,7 +791,7 @@ def _watch_stop_file(config: Config, stop: Event):
 
 
 def _render_loop(config: Config, stop: Event):
-    context = RenderContext(config.editing.whisper_model)
+    context = RenderContext(config.editing.whisper_model, config.editing.whisper_device)
     while not stop.is_set():
         try:
             render_due(config, stop, context)
@@ -817,7 +828,7 @@ def watch(config: Config, stop: Event | None = None):
         twitch = Twitch()
         token, _ = access_token(config.paths.database, "twitch")
         _chat_user(token, twitch.client_id)
-        games = {feed.key: twitch.game_id(feed.category) for feed in config.feeds}
+        games = {feed.key: twitch.game_id(feed.category) for feed in config.feeds if not feed.streamers}
         stop = stop if stop is not None else Event()
         session_id = _start_session(config)
         stop_file = config.paths.data_dir / STOP_FILE

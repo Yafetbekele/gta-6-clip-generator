@@ -13,6 +13,8 @@ from .editing import render
 from .filler import pick
 from .highlights import Moment
 from .review import get_clip
+from .caption_styles import STANDARD as STANDARD_CAPTIONS
+from .trim import PROTECT, TRIM
 
 
 def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=False):
@@ -44,19 +46,31 @@ def edit_hook(config, clip_id: str, text: str | None = None, *, suggest_only=Fal
         work = Path(folder)
         start, duration = clip['start'], clip['duration']
         padding = min(3, start)
+        section = (start - padding, start + duration + 3)
         source = download_vod(f"https://www.twitch.tv/videos/{clip['vod_id']}", work,
-                              section=(start - padding, start + duration + 3), max_height=720)
+                              section=section, max_height=720)
         try:
             details = {}
             render(source, work, target, Moment(padding, duration, 0), clip['streamer'],
                    replace(config.editing, layout='fit'),
-                   Transcriber(config.editing.whisper_model), details, hook_text=text, topic=topic,
+                   Transcriber(config.editing.whisper_model, config.editing.whisper_device), details, hook_text=text, topic=topic,
                    hook_key=clip_id, language=language, hook_style=style,
-                   filler=pick(clip_id, clip.get('filler'), base, duration))
+                   filler=pick(clip_id, clip.get('filler'), base, duration),
+                   # A clip in the dead-time test keeps its trim (see trim.py).
+                   trim=clip.get('trim') == TRIM,
+                   protect=(None if clip.get('cut_before') is None
+                            else (clip['cut_before'] - PROTECT, clip['cut_before'] + PROTECT)),
+                   # ...and its caption style (see caption_styles.py).
+                   caption_style=clip.get('caption_style') or STANDARD_CAPTIONS,
+                   section_length=section[1] - section[0])
             with connect(config.paths.database) as db:
-                updated = db.execute("""UPDATE clips SET path=?, hook_method=? WHERE id=? AND path=? AND state='pending'
+                updated = db.execute("""UPDATE clips SET path=?, hook_method=?, trimmed_s=?, trimmed_before_s=?
+                    WHERE id=? AND path=? AND state='pending'
                     AND NOT EXISTS (SELECT 1 FROM uploads WHERE clip_id=clips.id)""",
-                    (relative.as_posix(), details.get('hook_method', hook.method), clip_id, clip['path']))
+                    (relative.as_posix(), details.get('hook_method', hook.method),
+                     details.get('trimmed_s') if clip.get('trim') else clip.get('trimmed_s'),
+                     details.get('trimmed_before_s') if clip.get('trim') else clip.get('trimmed_before_s'),
+                     clip_id, clip['path']))
                 if updated.rowcount != 1:
                     raise ValueError('Clip changed or was approved while rendering; original kept')
         except BaseException:
