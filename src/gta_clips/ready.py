@@ -16,18 +16,23 @@ import time
 from .config import Config
 from .db import connect
 from .metadata import clean_title
+from .recipe import add, arms, blind, count_arms, misfits, need
 from .view_model import Model, clip_features, train
 
 FOLDER = "ready-to-post"
 # Clips older than this are not offered any more; the moment has passed.
 MAX_AGE = 3 * 86400
 
-# Which clips may be offered. A rejected clip, or one you rated 1 or 2, is never offered.
+# Which clips may be offered. A rejected clip, or one you rated 1 or 2, is never offered, and
+# neither is one not made with the running tests' current settings (see recipe.py).
 # The order among the rest comes from `_order`: stats tied to real views, or random until then.
 CANDIDATES = """
-SELECT c.id, c.path, c.streamer, c.title, c.description, c.hashtags, c.created
+SELECT c.id, c.path, c.streamer, c.title, c.description, c.hashtags, c.created,
+       c.hook_style, c.filler, c.trim, c.caption_style, c.cut_before, c.cut_after,
+       COALESCE(b.trigger_kind, 'vod') AS kind
 FROM clips c
 LEFT JOIN clip_ratings r ON r.clip_id = c.id
+LEFT JOIN live_bursts b ON b.clip_id = c.id
 WHERE c.account = ? AND c.state != 'rejected' AND c.created >= ?
   AND COALESCE(r.score, 3) >= 3
   AND NOT EXISTS (SELECT 1 FROM ready_exports e WHERE e.clip_id = c.id)
@@ -61,21 +66,85 @@ def _note(account, clip) -> str:
             f"Clip ID: {clip['id']}\n")
 
 
-def _order(db, candidates: list, model: Model | None, rng: random.Random) -> tuple[list, dict]:
-    """Highest predicted views first, with some random picks; fully random without a model.
+def fitting(config: Config, candidates: list, account: str = "") -> list:
+    """The candidates made with the running tests' current settings; says how many were left out and why."""
+    kept, left = [], {}
+    for clip in candidates:
+        wrong = misfits(config, dict(clip))
+        if wrong:
+            for name in wrong:
+                left[name] = left.get(name, 0) + 1
+        else:
+            kept.append(clip)
+    if left:
+        logging.info("%s: %d of %d clips not offered, made before the current test settings (%s)",
+                     account or "clips", len(candidates) - len(kept), len(candidates),
+                     ", ".join(f"{name}: {count}" for name, count in sorted(left.items())))
+    if candidates and not kept:
+        logging.warning("%s: none of %d recent clips fit the current test settings; is the renderer "
+                        "running with an old config? (restart it to load the settings)", account or "clips",
+                        len(candidates))
+    return kept
 
+
+# Clips whose arms are within this much of the neediest count as equally needed; the views model
+# picks among them.
+NEED_SLACK = 0.2
+
+
+def picked_arms(db, config: Config):
+    """Arm counts of every clip picked for posting so far (see recipe.count_arms)."""
+    rows = db.execute("""SELECT c.hook_style, c.filler, c.trim, c.caption_style, c.cut_before, c.cut_after,
+                                COALESCE(b.trigger_kind, 'vod') AS kind
+                         FROM ready_exports e JOIN clips c ON c.id = e.clip_id
+                         LEFT JOIN live_bursts b ON b.clip_id = c.id""").fetchall()
+    return count_arms(config, rows)
+
+
+def _order(db, candidates: list, model: Model | None, rng: random.Random,
+           config: Config | None = None, counts=None) -> tuple[list, dict]:
+    """What the running tests need most first, the best clip by predicted views among those.
+
+    Each pick goes to the clips whose test arms have been posted least (see recipe.need), so every
+    arm reaches a useful number of posts as soon as possible, and the counts are updated after each
+    pick. Among those, the views model chooses, ranking clips without the arm each test gave them
+    (see recipe.blind) so the tests stay fair. Some picks are random so the model keeps seeing clips
+    it would not choose; without a model, the order among equally needed clips is random.
     Also returns each clip's predicted log views, kept so they can be checked against real views.
     """
     remaining = list(candidates)
     rng.shuffle(remaining)
-    if model is None or not remaining:
+    if not remaining:
         return remaining, {}
-    found = clip_features(db, [clip["id"] for clip in remaining])
-    predicted = {clip_id: float(value) for clip_id, value in zip(found, model.predict(list(found.values())))}
-    remaining.sort(key=lambda clip: -predicted.get(clip["id"], float("-inf")))
+    predicted = {}
+    if model is not None:
+        found = clip_features(db, [clip["id"] for clip in remaining])
+        predicted = {clip_id: float(value) for clip_id, value in
+                     zip(found, model.predict([blind(features) for features in found.values()]))}
+        remaining.sort(key=lambda clip: -predicted.get(clip["id"], float("-inf")))
+    if config is None:
+        clip_arms = {clip["id"]: {} for clip in remaining}
+        counts = {}
+    else:
+        clip_arms = {clip["id"]: arms(config, dict(clip)) for clip in remaining}
+        counts = {name: dict(found) for name, found in (counts if counts is not None
+                                                         else picked_arms(db, config)).items()}
+    known: dict[str, set[str]] = {}
+    for found in clip_arms.values():
+        for name, arm in found.items():
+            known.setdefault(name, set()).add(arm)
     ordered = []
     while remaining:
-        ordered.append(remaining.pop(rng.randrange(len(remaining)) if rng.random() < EXPLORE else 0))
+        if model is not None and rng.random() < EXPLORE:
+            index = rng.randrange(len(remaining))
+        else:
+            needs = [need(counts, clip_arms[clip["id"]], known) for clip in remaining]
+            top = max(needs)
+            # remaining is best-predicted first, so the first needy enough clip is the best of them.
+            index = next(i for i, value in enumerate(needs) if value >= top - NEED_SLACK)
+        clip = remaining.pop(index)
+        add(counts, clip_arms[clip["id"]])
+        ordered.append(clip)
     return ordered, predicted
 
 
@@ -99,7 +168,12 @@ def export_due(config: Config, now: float | None = None, rng: random.Random | No
             if wanted <= 0:
                 continue
             candidates, predicted = _order(
-                db, db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall(), model, rng)
+                db, fitting(config, db.execute(CANDIDATES, (account.name, int(now - MAX_AGE))).fetchall(),
+                            account.name),
+                model, rng, config)
+        # Today's clips go first, in the same order among themselves; older ones only fill the rest.
+        midnight = moment.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        candidates.sort(key=lambda clip: clip["created"] < midnight)
         for clip in candidates:
             if wanted <= 0:
                 break

@@ -187,6 +187,12 @@ MIGRATIONS = [
     # The background gameplay the filler test gave a clip (see filler.py): a kind such as
     # subway_surfers, "none" for a test clip left without, or empty when the test was off.
     ((("clips", "filler", "TEXT"),), ""),
+    # The dead-time test (see trim.py): "trim" or "none" for a test clip, empty when the test was off;
+    # seconds cut from the clip, and how many of those came before a live clip's burst. The clip's
+    # duration stays the length of the stream window; the video is trimmed_s shorter.
+    ((("clips", "trim", "TEXT"), ("clips", "trimmed_s", "REAL"), ("clips", "trimmed_before_s", "REAL")), ""),
+    # The caption style the caption test gave a clip (see caption_styles.py), empty when it was off.
+    ((("clips", "caption_style", "TEXT"),), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

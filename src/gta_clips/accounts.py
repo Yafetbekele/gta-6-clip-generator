@@ -104,7 +104,7 @@ def _sort(config: Config) -> dict:
             feed = _matching_feed(config, burst["game_name"], burst["language"])
             if feed is None:
                 continue
-            account = pick_account(db, config, feed.key)
+            account = pick_account(db, config, feed.key, burst["anchor"])
             db.execute("UPDATE live_bursts SET account=? WHERE stream_id=? AND anchor=?",
                        (account, burst["stream_id"], burst["anchor"]))
             result["windows"] += 1

@@ -100,7 +100,13 @@ class LiveTest(unittest.TestCase):
         self.assertEqual(cuts.choose("12", 1000, "control", True), cuts.STANDARD)
         self.assertEqual(cuts.choose("12", 1000, "burst", True), cuts.choose("12", 1000, "burst", True))
         chosen = {cuts.choose("12", anchor, "burst", True) for anchor in range(500)}
-        self.assertEqual(chosen, {(b, a) for b in cuts.BEFORE for a in cuts.AFTER})
+        self.assertEqual(chosen, {(b, a) for b in cuts.BEFORE for a in cuts.AFTER} | {cuts.STANDARD})
+
+    def test_most_test_clips_are_short_and_a_quarter_keep_the_standard_cut(self):
+        chosen = [cuts.choose("12", anchor, "burst", True) for anchor in range(2000)]
+        standard = sum(cut == cuts.STANDARD for cut in chosen) / len(chosen)
+        self.assertAlmostEqual(standard, 1 / cuts.CONTROL_EVERY, delta=0.04)
+        self.assertTrue(all(20 <= sum(cut) <= 35 for cut in chosen if cut != cuts.STANDARD))
 
     def test_a_burst_too_early_for_the_longest_lead_in_is_skipped(self):
         stream = Broadcast("12", "42", "streamer", 1000)

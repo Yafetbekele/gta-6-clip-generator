@@ -37,7 +37,7 @@ MIN_CATEGORY_POSTS = 3
 SUMMARY = "view-model.json"
 
 FEATURE_SQL = """
-SELECT c.id, c.duration, c.cut_before, c.cut_after, c.hook_style, c.filler, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
+SELECT c.id, c.duration, c.cut_before, c.cut_after, c.hook_style, c.filler, c.trim, c.caption_style, COALESCE(c.account, '') AS account, COALESCE(b.trigger_kind, 'vod') AS kind, COALESCE(b.game_name, '') AS game,
        b.messages, f.baseline_per_10s, f.unique_chatters, f.peak_messages, f.peak_unique_chatters,
        f.peak_offset_s, f.viewer_count, f.viewer_rank, f.stream_age_s, f.is_mature,
        cf.speech_seconds, cf.word_count, cf.language_probability, cf.first_word_s, cf.last_word_s,
@@ -81,6 +81,12 @@ def features(row) -> dict[str, float | None]:
     # The background gameplay the filler test gave the clip (see filler.py), including "none".
     if row["filler"]:
         values[f"filler={row['filler']}"] = 1.0
+    # Whether the dead-time test trimmed the clip (see trim.py).
+    if row["trim"]:
+        values[f"trim={row['trim']}"] = 1.0
+    # The caption style the caption test gave the clip (see caption_styles.py).
+    if row["caption_style"]:
+        values[f"captions={row['caption_style']}"] = 1.0
     if row["game"]:
         values[f"category={row['game']}"] = 1.0
     # Some accounts reach far more people than others; this keeps that from counting as clip quality.
@@ -247,24 +253,106 @@ def fit(rows: list[dict], targets: list[float]) -> Model:
 
 
 def cut_results(db) -> dict:
-    """Median views at TARGET_AGE per platform for each lead-in and each follow-through tried.
+    """Median views at TARGET_AGE per platform for each whole cut (lead-in + follow-through) tried.
 
-    Each cut is chosen at random (see cuts.py), so differences here are not explained by which
-    clips got which cut. With fewer than about 30 posts in a group, the median is mostly luck.
+    Each post counts once, under its own cut. Only burst clips made since the cut test began count:
+    before it every live clip was 30 s + 30 s, so those would swamp the 30 s + 30 s group with
+    clips that were never part of the random draw. Each cut is chosen at random (see cuts.py), so
+    differences here are not explained by which clips got which cut. With fewer than about 30
+    posts in a group, the median is mostly luck.
     """
     views, clips, _ = targets(db)
+    began = db.execute("SELECT MIN(created) FROM clips WHERE cut_before IS NOT NULL AND cut_after IS NOT NULL "
+                       "AND NOT (cut_before = 30 AND cut_after = 30)").fetchone()[0]
+    if began is None:
+        return {}
     cuts = {row[0]: (row[1], row[2]) for row in db.execute(
-        "SELECT id, cut_before, cut_after FROM clips WHERE cut_before IS NOT NULL AND cut_after IS NOT NULL")}
+        """SELECT c.id, c.cut_before, c.cut_after FROM clips c JOIN live_bursts b ON b.clip_id = c.id
+           WHERE b.trigger_kind = 'burst' AND c.cut_before IS NOT NULL AND c.cut_after IS NOT NULL
+             AND c.created >= ?""", (began,))}
     groups: dict[str, dict[str, list[float]]] = {}
     for key, value in views.items():
-        platform, cut = key[0], cuts.get(clips[key])
-        if cut is None:
-            continue
-        for label in (f"{cut[0]}s before", f"{cut[1]}s after", f"{cut[0]}s before + {cut[1]}s after"):
-            groups.setdefault(platform, {}).setdefault(label, []).append(value)
+        cut = cuts.get(clips[key])
+        if cut is not None:
+            groups.setdefault(key[0], {}).setdefault(f"{cut[0]}s before + {cut[1]}s after", []).append(value)
     return {platform: {label: {"posts": len(found), "median_views": round(float(np.median(found)))}
                        for label, found in sorted(labels.items())}
             for platform, labels in sorted(groups.items())}
+
+
+def _watched(db) -> dict[tuple[str, str], float]:
+    """Latest average % of the video watched per post, where the platform reports it (YouTube)."""
+    return {(row[0], row[1]): row[2] for row in db.execute(
+        """SELECT s.platform, s.video_id, s.avg_view_percent FROM post_stats s
+           WHERE s.avg_view_percent IS NOT NULL
+             AND s.fetched = (SELECT MAX(fetched) FROM post_stats l WHERE l.platform = s.platform
+                              AND l.video_id = s.video_id AND l.avg_view_percent IS NOT NULL)""")}
+
+
+def trim_results(db) -> dict:
+    """Trimmed against untrimmed clips in the dead-time test (see trim.py), per platform.
+
+    Median views at TARGET_AGE, and the average % of the video watched where the platform reports
+    it. % watched answers more directly whether tighter editing holds viewers, and needs fewer
+    posts to show a difference. A trimmed clip is shorter, which on its own raises % watched, so
+    compare views too. Clips are trimmed or not at random, so the groups differ only by the trim.
+    """
+    views, clips, _ = targets(db)
+    watched = _watched(db)
+    arms = {row[0]: (row[1], row[2] or 0.0) for row in db.execute(
+        "SELECT id, trim, trimmed_s FROM clips WHERE trim IS NOT NULL AND trim <> ''")}
+    posted: dict[tuple[str, str], str] = {(row[0], row[1]): row[2] for row in db.execute(
+        "SELECT platform, video_id, clip_id FROM posts WHERE clip_id IS NOT NULL")}
+    groups: dict[str, dict[str, dict[str, list[float]]]] = {}
+    for key, clip in posted.items():
+        if clip not in arms:
+            continue
+        arm, trimmed = arms[clip]
+        group = groups.setdefault(key[0], {}).setdefault(arm, {"views": [], "watched": [], "trimmed": []})
+        group["trimmed"].append(trimmed)
+        if key in views:
+            group["views"].append(views[key])
+        if key in watched:
+            group["watched"].append(watched[key])
+    return {platform: {arm: {"posts": len(found["trimmed"]),
+                             "posts_with_24h_views": len(found["views"]),
+                             "median_views": round(float(np.median(found["views"]))) if found["views"] else None,
+                             "avg_percent_watched": round(float(np.mean(found["watched"])), 1)
+                             if found["watched"] else None,
+                             "avg_seconds_cut": round(float(np.mean(found["trimmed"])), 1)}
+                       for arm, found in sorted(arms_found.items())}
+            for platform, arms_found in sorted(groups.items())}
+
+
+def caption_results(db) -> dict:
+    """Each caption style in the caption test (see caption_styles.py), per platform.
+
+    Median views at TARGET_AGE and the average % watched where the platform reports it. Styles
+    are given at random, independently of the dead-time test, so each style gets trimmed and
+    untrimmed clips alike and the two tests don't mix up each other's results.
+    """
+    views, _, _ = targets(db)
+    watched = _watched(db)
+    styles = dict(db.execute("SELECT id, caption_style FROM clips WHERE caption_style IS NOT NULL "
+                             "AND caption_style <> ''"))
+    groups: dict[str, dict[str, dict[str, list]]] = {}
+    for platform, video, clip in db.execute(
+            "SELECT platform, video_id, clip_id FROM posts WHERE clip_id IS NOT NULL"):
+        if clip not in styles:
+            continue
+        group = groups.setdefault(platform, {}).setdefault(styles[clip], {"posts": [], "views": [], "watched": []})
+        group["posts"].append(video)
+        if (platform, video) in views:
+            group["views"].append(views[(platform, video)])
+        if (platform, video) in watched:
+            group["watched"].append(watched[(platform, video)])
+    return {platform: {style: {"posts": len(found["posts"]),
+                               "posts_with_24h_views": len(found["views"]),
+                               "median_views": round(float(np.median(found["views"]))) if found["views"] else None,
+                               "avg_percent_watched": round(float(np.mean(found["watched"])), 1)
+                               if found["watched"] else None}
+                       for style, found in sorted(found_styles.items())}
+            for platform, found_styles in sorted(groups.items())}
 
 
 def hook_results(db) -> dict:
@@ -335,7 +423,8 @@ def train(config: Config, now: float | None = None) -> Model | None:
         rows, values = training_rows(db, now)
         checked = check(db)
         report = {"predictions_checked": checked, "cut_test": cut_results(db), "hook_test": hook_results(db),
-                  "filler_test": filler_results(db),
+                  "filler_test": filler_results(db), "trim_test": trim_results(db),
+                  "caption_test": caption_results(db),
                   "youtube_restrictions": restriction_results(db),
                   "test_note": "Each group needs about 30 posts before its median means much."}
     path = config.paths.data_dir / SUMMARY

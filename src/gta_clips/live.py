@@ -259,7 +259,7 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
                VALUES (?, ?, ?, ?, ?, ?, ?, 'Waiting for the post-roll', ?, ?)""",
             (stream.stream_id, anchor, stream.broadcaster_id, stream.login,
              stream.game_name or config.twitch.game_name, messages, anchor + MOST_AFTER, kind,
-             pick_account(db, config, stream.feed)),
+             pick_account(db, config, stream.feed, anchor)),
         )
         db.execute(
             """INSERT INTO burst_features(stream_id, anchor, baseline_per_10s, observed_seconds,
@@ -275,18 +275,25 @@ def record_burst(config: Config, stream: Broadcast, timestamp: float, messages: 
     return True
 
 
-def pick_account(db, config: Config, feed_key: str) -> str | None:
-    """The feed's account set with the fewest windows, so accounts sharing a category stay even.
+# Accounts sharing a category are kept even over this long, not over all time: a set added later
+# would otherwise take every window until it caught up (gta6-4/5/6 starved gta6-1/2/3 for days).
+BALANCE_SECONDS = 86400
+
+
+def pick_account(db, config: Config, feed_key: str, at: float | None = None) -> str | None:
+    """The feed's account set with the fewest windows in the day before ``at`` (default now).
 
     Each window goes to exactly one account set, so no clip is posted on two accounts.
     """
     feed = next((feed for feed in config.feeds if feed.key == feed_key), None)
     if feed is None or not feed.accounts:
         return None
+    at = time.time() if at is None else at
     marks = ",".join("?" * len(feed.accounts))
     counts = dict(db.execute(
         f"""SELECT account, COUNT(*) FROM live_bursts WHERE account IN ({marks})
-            AND state NOT IN ('unavailable', 'skipped') GROUP BY account""", feed.accounts).fetchall())
+            AND state NOT IN ('unavailable', 'skipped') AND anchor > ? AND anchor <= ?
+            GROUP BY account""", (*feed.accounts, at - BALANCE_SECONDS, at)).fetchall())
     return min(feed.accounts, key=lambda name: (counts.get(name, 0), feed.accounts.index(name)))
 
 
