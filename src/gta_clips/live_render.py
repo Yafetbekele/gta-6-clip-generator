@@ -234,9 +234,11 @@ def _process_due(config: Config, stop: Event | None, context: RenderContext):
                WHERE state='waiting' AND anchor < unixepoch() - ?""", (MAX_ARCHIVE_WAIT,),
         )
         workers = config.live.render_workers
+        # On demand, only windows the ready step asked for are rendered (see on_demand.py).
         due = db.execute(
             """SELECT * FROM live_bursts WHERE state='waiting' AND retry_at<=unixepoch()
-               ORDER BY retry_at, anchor LIMIT ?""", (max(5, 3 * workers),),
+                 AND (? = 0 OR render_requested IS NOT NULL)
+               ORDER BY retry_at, anchor LIMIT ?""", (int(config.live.render_on_demand), max(5, 3 * workers)),
         ).fetchall()
     if not due:
         return

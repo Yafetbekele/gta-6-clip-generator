@@ -199,6 +199,10 @@ banned = []              # optional: platforms where this set's account is banne
 - Each video has a `.txt` beside it with the title, description and hashtags, and the set's `youtube`, `tiktok`, `instagram` and `email` names when they are filled in. Never put passwords in the config.
 - The videos are copies; the originals stay in `clips/`. Day folders older than a week are removed.
 
+## Render on demand
+
+With `live.render_on_demand = true`, the watcher still saves every chat burst and viewer clip as a window, but render-live only renders the windows the ready step asks for. Each `gta-clips ready` run tops every account set up to `live.render_buffer` postable clips made in the last day: it asks for the windows the running tests need most (the same balancing posting uses), and the strongest first within each source (chat spike over the channel's baseline, or a viewer clip's Twitch views). A window rejected while rendering frees its place for the next run. Windows older than 36 hours aren't asked for, and unrendered ones still expire after 48 hours.
+
 ## Viewer clips (test)
 
 With `live.test_viewer_clips = true`, `gta-clips viewer-clips` (run every `runtime.viewer_clips_every_minutes`) asks Twitch for the most-viewed clips of the last day in each account set's category and language, or of a streamer set's channels. Up to 3 a day per account set (at least 100 views, most viewed first) are saved as windows of kind `viewer_clip`: 30 s before the end of the viewer's clip and 5 s after. render-live cuts them from the broadcast like chat bursts, with the same hooks, captions, background and checks; the viewer's clip itself is never downloaded. Picking balances "viewer clip" against "chat burst" posts, and `data/view-model.json` reports their views under `source_test`. Viewer clips are moments viewers already chose, so a difference compares the sources, not an edit.

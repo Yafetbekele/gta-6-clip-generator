@@ -45,6 +45,11 @@ render_workers = 2
 # streamers (up to 3 per account set a day), and post them alongside chat bursts to compare views.
 # Only the window is cut from the broadcast; the viewer's clip itself is not downloaded.
 test_viewer_clips = false
+# Render a saved window only when the ready step needs clips for its account set, keeping
+# render_buffer postable clips from the last day per set. Off renders every window (about ten
+# for each clip posted).
+render_on_demand = false
+render_buffer = 3
 
 # Used by `gta-clips run` and the dashboard. Times are local, as HH:MM.
 # An end earlier than the start runs past midnight, e.g. 22:00 to 02:00.

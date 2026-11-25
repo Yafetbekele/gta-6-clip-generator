@@ -117,6 +117,10 @@ class LiveConfig:
     test_cuts: bool = False
     # Also cut the day's most-viewed Twitch viewer clips (viewer_clips.py), as a test against bursts.
     test_viewer_clips: bool = False
+    # Render a window only when the ready step needs clips for that account set (see on_demand.py),
+    # keeping render_buffer clips ready per set, instead of rendering every window.
+    render_on_demand: bool = False
+    render_buffer: int = 3
 
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -478,6 +482,9 @@ def _live(raw: object) -> LiveConfig:
         test_cuts=_boolean(options.get("test_cuts", defaults.test_cuts), "live.test_cuts"),
         test_viewer_clips=_boolean(options.get("test_viewer_clips", defaults.test_viewer_clips),
                                    "live.test_viewer_clips"),
+        render_on_demand=_boolean(options.get("render_on_demand", defaults.render_on_demand),
+                                  "live.render_on_demand"),
+        render_buffer=_integer(options.get("render_buffer", defaults.render_buffer), "live.render_buffer", 1, 20),
     )
 
 

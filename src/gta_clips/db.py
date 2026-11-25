@@ -193,6 +193,8 @@ MIGRATIONS = [
     ((("clips", "trim", "TEXT"), ("clips", "trimmed_s", "REAL"), ("clips", "trimmed_before_s", "REAL")), ""),
     # The caption style the caption test gave a clip (see caption_styles.py), empty when it was off.
     ((("clips", "caption_style", "TEXT"),), ""),
+    # When the ready step asked for a window to be rendered (live.render_on_demand, see on_demand.py).
+    ((("live_bursts", "render_requested", "INTEGER"),), ""),
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 

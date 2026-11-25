@@ -228,6 +228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with worker_lock(config.paths.data_dir, "ready"):
                 retitle_explicit(config)
                 added = export_due(config)
+                from .on_demand import request_renders
+                request_renders(config)
                 queue_ready_for_instagram(config)
                 rewrite_notes(config)
                 cleanup(config, config.runtime.ready_keep_days)
