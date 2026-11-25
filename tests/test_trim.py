@@ -22,7 +22,7 @@ from gta_clips.download import ffmpeg_binary
 from gta_clips.editing import render, video_duration
 from gta_clips.highlights import Moment
 from gta_clips.upload.instagram import window
-from gta_clips.view_model import TARGET_AGE, cut_results, trim_results
+from gta_clips.view_model import TARGET_AGE, cut_results, retention_results, trim_results
 
 
 def _wav(path: Path, loud: list[tuple[float, float]], seconds: float, rate: int = 16000):
@@ -174,6 +174,28 @@ class ReportTest(unittest.TestCase):
                                          "avg_percent_watched": 55.0, "avg_seconds_cut": 5.0})
         self.assertEqual(found["none"]["median_views"], 80)
         self.assertEqual(found["none"]["avg_seconds_cut"], 0.0)
+
+    def test_cut_report_includes_percent_watched_where_youtube_reports_it(self):
+        self._post(created=1000, views=5)
+        self._post(cut=(15, 5), created=2000, views=50, watched=70.0)
+        self._post(cut=(15, 5), created=2200, views=90, watched=60.0)
+        self._post(cut=(30, 30), created=2100, views=70)
+        with connect(self.database) as db:
+            found = cut_results(db)["youtube"]
+        self.assertEqual(found["15s before + 5s after"], {"posts": 2, "median_views": 70, "posts_with_watched": 2,
+                                                         "avg_percent_watched": 65.0})
+        self.assertNotIn("avg_percent_watched", found["30s before + 30s after"])
+
+    def test_retention_splits_posts_past_the_first_thousand_views(self):
+        self._post(views=1200, watched=80.0)
+        self._post(views=300, watched=50.0)
+        self._post(views=100, watched=40.0)
+        self._post(views=5000)  # No analytics yet.
+        with connect(self.database) as db:
+            found = retention_results(db)["youtube"]
+        self.assertEqual(found["all"]["posts"], 3)
+        self.assertEqual(found["1,000+ views"]["avg_percent_watched"], 80.0)
+        self.assertEqual(found["under 1,000 views"]["avg_percent_watched"], 45.0)
 
 
 if __name__ == "__main__":
