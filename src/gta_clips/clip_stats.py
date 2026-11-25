@@ -145,7 +145,7 @@ def measure(config: Config, budget_seconds: float = 600, limit: int | None = Non
     only = f"AND c.id IN ({','.join('?' * len(clip_ids))})" if clip_ids else ""
     with connect(config.paths.database) as db:
         clips = db.execute(
-            f"""SELECT c.id, c.path, c.duration, c.cut_before, c.cut_after, b.stream_id, b.anchor, b.broadcaster_id
+            f"""SELECT c.id, c.path, c.duration - COALESCE(c.trimmed_s, 0) AS duration, c.cut_before, c.cut_after, b.stream_id, b.anchor, b.broadcaster_id
                FROM clips c LEFT JOIN live_bursts b ON b.clip_id = c.id
                WHERE NOT EXISTS (SELECT 1 FROM clip_stats s WHERE s.clip_id = c.id) {only}
                ORDER BY c.created DESC""", clip_ids or []).fetchall()

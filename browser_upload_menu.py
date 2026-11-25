@@ -92,7 +92,6 @@ def run_menu_action(settings):
             finally:
                 db.close()
             print(f'Hourly posting enabled for {account}/{platform}. Status: {status}.')
-            print('Confirmed submissions under review count as successful upload tests.')
         else:
             print('Hourly posting disabled.')
         return

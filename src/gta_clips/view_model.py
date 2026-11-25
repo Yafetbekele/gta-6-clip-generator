@@ -355,6 +355,25 @@ def caption_results(db) -> dict:
             for platform, found_styles in sorted(groups.items())}
 
 
+def source_results(db) -> dict:
+    """Median views at TARGET_AGE per platform for viewer-clip vs chat-burst clips.
+
+    Not random like the editing tests: viewer clips are moments Twitch viewers already liked, so a
+    difference says which source finds better moments, not which edit works better.
+    """
+    views, clips, _ = targets(db)
+    kinds = dict(db.execute("""SELECT c.id, b.trigger_kind FROM clips c JOIN live_bursts b
+                               ON b.clip_id = c.id WHERE b.trigger_kind IN ('burst', 'viewer_clip')"""))
+    groups: dict[str, dict[str, list[float]]] = {}
+    for key, value in views.items():
+        kind = kinds.get(clips[key])
+        if kind is not None:
+            groups.setdefault(key[0], {}).setdefault(kind, []).append(value)
+    return {platform: {kind: {"posts": len(found), "median_views": round(float(np.median(found)))}
+                       for kind, found in sorted(kinds_.items())}
+            for platform, kinds_ in sorted(groups.items())}
+
+
 def hook_results(db) -> dict:
     """Median views at TARGET_AGE per platform for each hook style tried, and for what was shown.
 
@@ -424,7 +443,7 @@ def train(config: Config, now: float | None = None) -> Model | None:
         checked = check(db)
         report = {"predictions_checked": checked, "cut_test": cut_results(db), "hook_test": hook_results(db),
                   "filler_test": filler_results(db), "trim_test": trim_results(db),
-                  "caption_test": caption_results(db),
+                  "caption_test": caption_results(db), "source_test": source_results(db),
                   "youtube_restrictions": restriction_results(db),
                   "test_note": "Each group needs about 30 posts before its median means much."}
     path = config.paths.data_dir / SUMMARY

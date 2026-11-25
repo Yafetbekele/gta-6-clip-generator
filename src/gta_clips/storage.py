@@ -1,8 +1,10 @@
 """Keep the clips folder from filling the disk.
 
 Each account set keeps its newest ``runtime.max_clips_per_account`` clip videos. Older videos are
-removed, and so is any video past the age at which the ready step stops offering it. Database rows,
-ratings and measured stats are left untouched; only the video file and its edit manifest go.
+removed, and every video goes once it is past the age at which the ready step stops offering it
+(three days), even an approved one still waiting to be sent: its waiting uploads are marked failed.
+Database rows, ratings and measured stats are left untouched; only the video file and its edit
+manifest go.
 """
 import logging
 import time
@@ -37,12 +39,12 @@ def plan_trim(config: Config, now: float | None = None) -> list[tuple[Path, int]
         path = (config.paths.data_dir / row["path"]).resolve()
         if not path.is_relative_to(root) or path.suffix.lower() != ".mp4" or not path.is_file():
             continue
-        # An approved clip is kept until every upload of it has gone out.
+        # Within three days, an approved clip is kept until every upload of it has gone out.
         protected = (row["state"] == "approved" and not row["sent"]) or not row["measured"]
         account = row["account"] or ""
         within_cap = kept_per_account[account] < keep
         fresh = now - row["created"] < MAX_AGE
-        if protected or (within_cap and fresh):
+        if fresh and (protected or within_cap):
             kept_per_account[account] += 1
             verdicts[path].append(False)
         else:
@@ -53,6 +55,9 @@ def plan_trim(config: Config, now: float | None = None) -> list[tuple[Path, int]
 def trim_clips(config: Config, now: float | None = None) -> tuple[int, int]:
     """Remove the videos ``plan_trim`` picks. Returns (files removed, bytes freed)."""
     removed = freed = 0
+    gone: list[str] = []
+    # The clips folder may be a link to another drive, so name files from it, not from data_dir.
+    root = (config.paths.data_dir / "clips").resolve()
     for path, size in plan_trim(config, now):
         try:
             path.unlink()
@@ -60,8 +65,15 @@ def trim_clips(config: Config, now: float | None = None) -> tuple[int, int]:
             logging.warning("Could not remove %s: %s", path.name, error)
             continue
         path.with_suffix(".edit.json").unlink(missing_ok=True)
+        gone.append("clips/" + path.relative_to(root).as_posix())
         removed += 1
         freed += size
+    if gone:
+        # Uploads still waiting for a removed video can never go out; say why instead of retrying.
+        marks = ",".join("?" * len(gone))
+        with connect(config.paths.database) as db:
+            db.execute(f"""UPDATE uploads SET state='failed', detail='Clip was over 3 days old; its video was removed'
+                           WHERE state='queued' AND clip_id IN (SELECT id FROM clips WHERE path IN ({marks}))""", gone)
     if removed:
         logging.info("Removed %d old clip videos (%.1f GB) to stay under %d per account",
                      removed, freed / 1e9, config.runtime.max_clips_per_account)

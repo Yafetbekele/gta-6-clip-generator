@@ -62,6 +62,32 @@ class AccountConfigTest(unittest.TestCase):
         self.assertEqual(config.total_channels, 13)
         self.assertEqual(config.account("irl-es").title, "IRL Spanish")
 
+    def test_an_account_can_watch_several_categories(self):
+        extra = ACCOUNTS + ('\n[[accounts]]\nname = "irl-pt"\ncategory = ["Just Chatting", "Grand Theft Auto VI"]\n'
+                            'language = "pt"\nchannels = 4\n')
+        with TemporaryDirectory() as folder:
+            config = load_config(_write(Path(folder), extra))
+            rows = {row["name"]: row for row in summary(config)}
+        account = config.account("irl-pt")
+        self.assertEqual(account.category, "Just Chatting")
+        self.assertEqual(account.categories, ("Just Chatting", "Grand Theft Auto VI"))
+        feeds = {feed.key: feed for feed in config.feeds}
+        # Each category gets the full channel count, in its own feed apart from other languages.
+        self.assertEqual(feeds["Just Chatting|pt"].accounts, ("irl-pt",))
+        self.assertEqual(feeds["Grand Theft Auto VI|pt"].accounts, ("irl-pt",))
+        self.assertEqual(feeds["Grand Theft Auto VI|pt"].channels, 4)
+        self.assertEqual(feeds["Grand Theft Auto VI|en"].accounts, ("gta6-1", "gta6-2"))
+        self.assertEqual(config.total_channels, 21)
+        self.assertEqual(rows["irl-pt"]["category"], "Just Chatting, Grand Theft Auto VI")
+        self.assertEqual(rows["irl-pt"]["feed_channels"], 8)
+        for value, message in (("[]", "at least one"), ('["Minecraft", "minecraft"]', "twice"), ('["", "Minecraft"]', "non-empty")):
+            block = f'\n[[accounts]]\nname = "x"\ncategory = {value}\n'
+            with self.subTest(value), TemporaryDirectory() as folder, self.assertRaisesRegex(ConfigError, message):
+                load_config(_write(Path(folder), block))
+        many = '\n[[accounts]]\nname = "a"\ncategory = ["Minecraft", "Fortnite", "Roblox", "Tibia", "Dota 2", "VALORANT"]\nchannels = 20\n'
+        with TemporaryDirectory() as folder, self.assertRaisesRegex(ConfigError, "the most is 100"):
+            load_config(_write(Path(folder), many))
+
     def test_without_accounts_the_single_category_still_works(self):
         config = load_config(ROOT / "config.example.toml")
         self.assertEqual(len(config.feeds), 1)

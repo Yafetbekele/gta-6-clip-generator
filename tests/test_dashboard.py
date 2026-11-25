@@ -141,7 +141,8 @@ class RunnerTest(TempConfig):
         self.runner.tick(start)
         self.assertEqual([name for name, _ in self.spawned], ["watch-live"])
         self.runner.tick(start + 61)
-        self.assertEqual([name for name, _ in self.spawned], ["watch-live", "render-live", "ready", "stats"])
+        self.assertEqual([name for name, _ in self.spawned], ["watch-live", "render-live", "ready", "stats",
+                                                             "viewer-clips"])
         status = json.loads((self.folder / "data" / runner.STATUS_FILE).read_text(encoding="utf-8"))
         self.assertTrue(status["in_window"])
         self.assertTrue(status["watcher"]["running"])

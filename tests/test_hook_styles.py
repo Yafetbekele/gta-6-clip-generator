@@ -11,7 +11,7 @@ import unittest
 from gta_clips import hook_styles
 from gta_clips.config import ConfigError, PathsConfig, _editing, load_config
 from gta_clips.context_text import (GAME_TAKES, GENERIC_TAKES, MAX_HOOK_LENGTH, QUOTE_LABELS, SEQUEL_TAKES,
-                                    STYLES, debate_hook)
+                                    STYLES, TEASES, TEST_STYLES, debate_hook)
 from gta_clips.db import connect
 from gta_clips.live import Broadcast, record_burst
 from gta_clips.live_render import render_due
@@ -25,7 +25,19 @@ class HookStyleTest(unittest.TestCase):
         self.assertIsNone(hook_styles.choose("live-12-1000", False))
         self.assertEqual(hook_styles.choose("live-12-1000", True), hook_styles.choose("live-12-1000", True))
         chosen = {hook_styles.choose(f"live-12-{anchor}", True) for anchor in range(200)}
-        self.assertEqual(chosen, set(STYLES))
+        self.assertEqual(chosen, set(TEST_STYLES))
+
+    def test_plain_and_tease_hooks_have_no_debate_in_them(self):
+        plain = debate_hook(SPEECH, "Grand Theft Auto VI", "k", style="plain")
+        self.assertEqual((plain.method, plain.label), ("plain_quote_v1", ""))
+        self.assertIn(plain.text, SPEECH)
+        # Without a usable quote, "plain" falls back to a keep-watching line, never a debate.
+        for style in ("plain", "tease"):
+            for language in ("en", "es", "pt"):
+                hook = debate_hook("uh", "Grand Theft Auto VI", "k", language=language, style=style)
+                self.assertEqual((hook.method, hook.label), ("tease_v1", ""))
+                self.assertIn(hook.text, TEASES[language])
+        self.assertTrue(set(TEST_STYLES) <= set(STYLES))
 
     def test_each_style_makes_its_kind_of_hook(self):
         quote = debate_hook(SPEECH, "Grand Theft Auto VI", "k", style="quote")

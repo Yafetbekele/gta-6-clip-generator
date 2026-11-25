@@ -87,6 +87,24 @@ class ExportTest(unittest.TestCase):
         self.assertIn("#gta6", note)
         self.assertTrue((self.config.paths.data_dir / "clips/gta6-1/loved.mp4").is_file())  # copied, not moved
 
+    def test_todays_clips_come_before_older_ones(self):
+        # self.now is 23:00, so 30 hours ago is yesterday and 2 hours ago is today.
+        for index in range(4):
+            self._clip(f"old{index}", age=30 * 3600)
+        self._clip("today", age=2 * 3600)
+        config = replace(self.config, runtime=replace(self.config.runtime, ready_per_day=1))
+        for seed in range(6):
+            with connect(config.paths.database) as db:
+                db.execute("DELETE FROM ready_exports")
+            export_due(config, self.now, random.Random(seed))
+            self.assertEqual(self._exported(), ["today"])
+        with connect(config.paths.database) as db:
+            db.execute("DELETE FROM ready_exports")
+        # With no clip from today left, yesterday's still fill the day.
+        export_due(replace(config, runtime=replace(config.runtime, ready_per_day=3)), self.now)
+        self.assertEqual(self._exported()[0], "today")
+        self.assertEqual(len(self._exported()), 3)
+
     def test_order_is_random_without_enough_posts(self):
         for index in range(8):
             self._clip(f"c{index}", messages=10 + index)

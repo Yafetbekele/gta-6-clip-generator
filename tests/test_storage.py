@@ -63,6 +63,18 @@ class TrimTest(unittest.TestCase):
         self.assertEqual(plan_trim(self.config, NOW), [])
         self.assertTrue(approved.exists() and unmeasured.exists())
 
+    def test_everything_goes_after_three_days_and_waiting_uploads_fail(self):
+        approved = self._clip("a", 73, state="approved")
+        unmeasured = self._clip("b", 80, measured=False)
+        with connect(self.config.paths.database) as db:
+            db.execute("INSERT INTO uploads(clip_id, platform, checkpoint) VALUES ('a', 'instagram', '{}')")
+        self.assertEqual(trim_clips(self.config, NOW), (2, 20))
+        self.assertFalse(approved.exists() or unmeasured.exists())
+        with connect(self.config.paths.database) as db:
+            state, detail = db.execute("SELECT state, detail FROM uploads WHERE clip_id='a'").fetchone()
+        self.assertEqual(state, "failed")
+        self.assertIn("3 days", detail)
+
     def test_shared_file_stays_while_any_clip_still_needs_it(self):
         self._clip("a", 1)
         shared = self._clip("b", 2, path="clips/gta6-1/shared.mp4")

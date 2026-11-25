@@ -72,7 +72,8 @@ def _review(config, args):
         review.export_clip(config, args.clip_id, args.destination)
 
 
-LOGGED_COMMANDS = ("ingest", "publish", "ready", "stats", "watch-live", "render-live", "review-web", "run", "dashboard")
+LOGGED_COMMANDS = ("ingest", "publish", "ready", "stats", "watch-live", "render-live", "review-web", "run", "dashboard",
+                   "viewer-clips")
 
 
 def _logging(config, command: str) -> bool:
@@ -105,6 +106,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser("publish", help="Send approved clips when their schedule permits")
     commands.add_parser("ready", help="Copy new clips to the ready-to-post folder for posting by hand")
     commands.add_parser("stats", help="Measure clips, read post views and refit the views model")
+    commands.add_parser("viewer-clips", help="Save the day's most-viewed Twitch viewer clips for render-live")
     posted = commands.add_parser("posted", help="Record the link of a clip you posted by hand")
     posted.add_argument("clip_id", help="The Clip ID from the clip's .txt note")
     posted.add_argument("url", help="The YouTube, TikTok or Instagram link of the post")
@@ -142,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "check-config":
         destinations = [platform for platform, settings in config.schedule.items() if settings.daily_limit]
-        categories = ", ".join(dict.fromkeys(feed.category for feed in config.feeds))
+        categories = ", ".join(dict.fromkeys(feed.label for feed in config.feeds))
         print(f"Configuration is valid for {categories}.")
         streamers = ("all channels in each category" if config.accounts or config.twitch.all_streamers
                      else ", ".join(config.twitch.streamers) or "none configured")
@@ -150,8 +152,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Live chat watcher: up to {config.total_channels} channels, "
               f"bursts at {config.live.spike_multiplier:g}x the normal chat rate (run watch-live to start)")
         for account in config.accounts:
-            print(f"  Account set {account.name}: {account.category} "
-                  f"({account.language or 'any language'}), {account.channels} channels")
+            if account.streamers:
+                print(f"  Account set {account.name}: {account.watches}, live in any category")
+                continue
+            print(f"  Account set {account.name}: {account.watches} "
+                  f"({account.language or 'any language'}), {account.channels} channels{' per category' if account.more_categories else ''}")
         print(f"Storage: {config.paths.data_dir}")
         print(f"Enabled posting destinations: {', '.join(destinations) or 'none'}")
         return 0
@@ -235,6 +240,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             with worker_lock(config.paths.data_dir, "stats"):
                 print(run_stats(config))
             return 0
+        if args.command == "viewer-clips":
+            from .viewer_clips import collect
+            print(f"Saved {collect(config)} viewer-clip windows")
+            return 0
         if args.command == "posted":
             from .post_stats import record
             try:
@@ -262,7 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             _review(config, args)
     except WorkerBusy as exc:
-        parser.exit(0 if args.command in ("ingest", "publish", "ready", "stats", "watch-live", "run") else 1, f"{exc}\n")
+        parser.exit(0 if args.command in ("ingest", "publish", "ready", "stats", "watch-live", "run",
+                                                "viewer-clips") else 1, f"{exc}\n")
     except RequestException as exc:
         fail(f"API request failed ({type(exc).__name__}). Check credentials and connectivity.\n", exc)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError, sqlite3.Error) as exc:

@@ -182,6 +182,7 @@ banned = []              # optional: platforms where this set's account is banne
 ```
 
 - Sets with the same category and language share one group of channels. Three English GTA 6 sets with 5 channels each watch 15 GTA 6 channels together. Each new clip window goes to the set in that group with the fewest windows so far, so a clip belongs to exactly one set and is never posted twice.
+- `category` can also be a list, such as `["Just Chatting", "Grand Theft Auto VI"]`. The set then watches `channels` channels in each category, in its language, and its clips come from all of them.
 - When account sets are configured, `[twitch].game_name` and `[live].max_channels` are ignored. The watcher covers each set's category and language, up to 100 channels in total.
 - Clips are saved in `clips/<set name>/` inside the storage directory. Debate headlines use the set's language (English, Spanish or Portuguese). A quote from the stream is only used when the transcript is in the same language.
 - Connect each set's logins with `gta-clips auth youtube --account NAME`, and the same for `tiktok` and `instagram`. A set only publishes with its own logins. `gta-clips auth youtube` without `--account` is the login for clips made before account sets. Twitch chat uses one login for everything.
@@ -197,6 +198,10 @@ banned = []              # optional: platforms where this set's account is banne
 - The order comes from real post numbers, not hand-picked weights (see below). Until enough posts have views, clips are picked at random so the first posts are a fair sample.
 - Each video has a `.txt` beside it with the title, description and hashtags, and the set's `youtube`, `tiktok`, `instagram` and `email` names when they are filled in. Never put passwords in the config.
 - The videos are copies; the originals stay in `clips/`. Day folders older than a week are removed.
+
+## Viewer clips (test)
+
+With `live.test_viewer_clips = true`, `gta-clips viewer-clips` (run every `runtime.viewer_clips_every_minutes`) asks Twitch for the most-viewed clips of the last day in each account set's category and language, or of a streamer set's channels. Up to 3 a day per account set (at least 100 views, most viewed first) are saved as windows of kind `viewer_clip`: 30 s before the end of the viewer's clip and 5 s after. render-live cuts them from the broadcast like chat bursts, with the same hooks, captions, background and checks; the viewer's clip itself is never downloaded. Picking balances "viewer clip" against "chat burst" posts, and `data/view-model.json` reports their views under `source_test`. Viewer clips are moments viewers already chose, so a difference compares the sources, not an edit.
 
 ## Clip stats and views
 

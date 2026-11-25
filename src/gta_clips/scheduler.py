@@ -1,6 +1,7 @@
 """Send approved clips within each destination's local daily cap and spacing."""
 
 from collections.abc import Callable
+import hashlib
 import json
 import logging
 import time
@@ -26,11 +27,26 @@ SENDERS: dict[str, Callable[[Upload], Result]] = {
 }
 
 
+def spacing_seconds(settings, platform: str, account: str, last_sent: int) -> int:
+    """Minimum spacing plus a random extra delay of up to ``jitter_minutes``.
+
+    The extra delay is drawn from the last post's time, so checking again every few minutes
+    keeps the same due time instead of drawing a new one each check.
+    """
+    base = settings.min_spacing_minutes * 60
+    if not settings.jitter_minutes:
+        return base
+    seed = hashlib.sha256(f"{platform}/{account}/{last_sent}".encode()).digest()
+    return base + int.from_bytes(seed[:8], "big") % (settings.jitter_minutes * 60 + 1)
+
+
 def _run_one(config: Config, platform: str, account: str | None = None) -> bool:
     """Send one due clip for ``account`` (None: clips made before account sets) on ``platform``.
 
     Each account set has its own login, daily cap and spacing per platform.
     """
+    if platform == "instagram" and account in config.runtime.instagram_browser_accounts:
+        return True
     database = config.paths.database
     owner = account or ""
     now = int(time.time())
@@ -46,7 +62,7 @@ def _run_one(config: Config, platform: str, account: str | None = None) -> bool:
         ).fetchone()
         if pacing["today"] >= settings.daily_limit:
             return True
-        if pacing["last"] and now < pacing["last"] + settings.min_spacing_minutes * 60:
+        if pacing["last"] and now < pacing["last"] + spacing_seconds(settings, platform, owner, pacing["last"]):
             return True
         job = db.execute(
             """SELECT clips.*, uploads.attempts, uploads.retry_at, uploads.checkpoint,

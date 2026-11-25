@@ -36,9 +36,11 @@ def readiness(db, account, platform, target, now):
         return 'paused: account verification / appeal required'
     rows = db.execute('SELECT state,started FROM posts WHERE account=? AND platform=?',
                       (account, platform)).fetchall()
-    # Held clips remain excluded by the upload ledger, but do not stop this account.
-    if not any(r['state'] in ('posted', 'under_review') for r in rows):
-        return 'needs successful test upload'
+    # No test upload is required: a new account posts as soon as it has clips.
+    # Held clips remain excluded by the upload ledger, and any attempt (even a
+    # failed one) still starts the spacing timer, so failures never cause bursts.
+    if not rows:
+        return 'ready'
     latest = max(r['started'] for r in rows)
     spacing = posting_spacing(account, platform, target, latest)
     if now - latest < spacing:

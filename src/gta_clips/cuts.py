@@ -21,12 +21,17 @@ AFTER = (5, 10)
 # One burst in this many keeps STANDARD, so the short cuts have 60 s clips to beat.
 CONTROL_EVERY = 4
 # The most any cut needs: a burst this early in a stream, or this recent, can't be cut yet.
-MOST_BEFORE = max(BEFORE + (STANDARD[0],))
-MOST_AFTER = max(AFTER + (STANDARD[1],))
+# A viewer clip's window ends where the viewer's Twitch clip ends (viewer_clips.py), so it shows
+# the build-up and a few seconds of aftermath.
+VIEWER = (30, 5)
+MOST_BEFORE = max(BEFORE + (STANDARD[0], VIEWER[0]))
+MOST_AFTER = max(AFTER + (STANDARD[1], VIEWER[1]))
 
 
 def choose(stream_id: str, anchor: int, kind: str, testing: bool) -> tuple[int, int]:
     """(seconds before, seconds after) the burst for this clip."""
+    if kind == "viewer_clip":
+        return VIEWER
     if not testing or kind != "burst":
         return STANDARD
     digest = sha256(f"{stream_id}/{anchor}".encode()).digest()

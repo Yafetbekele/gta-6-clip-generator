@@ -208,6 +208,8 @@ def queue_instagram(config: Config, db, account: str, clip_id: str) -> bool:
     clips to YouTube). Only one clip waits per account at a time, so a daily limit lower than
     ready_per_day posts the newest picks instead of building a backlog of stale ones.
     """
+    if account in config.runtime.instagram_browser_accounts:
+        return False
     if config.schedule["instagram"].daily_limit <= 0:
         return False
     if not db.execute("SELECT 1 FROM oauth WHERE platform=?", (f"instagram@{account}",)).fetchone():

@@ -34,13 +34,34 @@ PLATFORM_NAMES = {'youtube': 'YouTube', 'instagram': 'Instagram', 'tiktok': 'Tik
 
 
 def banned_platforms(options):
-    """{(account, platform)} marked `banned` in config.toml; an unreadable file marks none."""
+    """Entries marked `banned` in config.toml: (account, platform) for a whole account, or
+    (account, platform, handle) for one earlier handle. An unreadable file marks none."""
     try:
         accounts = tomllib.loads(options.read_text(encoding='utf-8-sig')).get('accounts', [])
     except (OSError, tomllib.TOMLDecodeError):
         return set()
-    return {(account.get('name'), platform) for account in accounts if isinstance(account, dict)
-            for platform in account.get('banned', []) if isinstance(platform, str)}
+    banned = set()
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        for entry in account.get('banned', []):
+            if isinstance(entry, str):
+                platform, _, handle = entry.strip().partition(':')
+                key = (account.get('name'), platform) + ((handle.lstrip('@').lower(),) if handle else ())
+                banned.add(key)
+    return banned
+
+
+def post_handle(url):
+    """The account handle in an Instagram or TikTok post link, or None."""
+    import re
+    match = re.search(r'(?:instagram\.com|tiktok\.com)/@?([\w.]+)/(?:reel|reels|p|video)/', url or '')
+    return match.group(1).lower() if match else None
+
+
+def row_is_banned(row, banned):
+    account, platform = row.get('account'), row.get('platform')
+    return (account, platform) in banned or (account, platform, row.get('handle')) in banned
 
 
 def reel_code(url):
@@ -57,6 +78,7 @@ def merge_same_reel(rows):
     """
     groups = {}
     for row in rows:
+        row = {**row, 'handle': row.get('handle') or post_handle(row.get('url'))}
         code = reel_code(row.get('url')) if row.get('platform') == 'instagram' else None
         groups.setdefault(code or id(row), []).append(row)
     merged = []
@@ -72,6 +94,8 @@ def merge_same_reel(rows):
             elif keep.get(key) is None:
                 keep[key] = next((r[key] for r in group if r.get(key) is not None), None)
         keep['fetched'] = newest.get('fetched')
+        # The publisher's link has no handle; the collector's says which account the Reel was on.
+        keep['handle'] = next((r['handle'] for r in group if r.get('handle')), None)
         merged.append(keep)
     return merged
 
@@ -168,8 +192,12 @@ document.querySelectorAll('.filters').forEach(bar => bar.addEventListener('click
 
 
 def render_page(merged, attempts, checks, banned, titles, counts):
-    """The overview page: totals, one row per channel, then every post with the most viewed first."""
-    live = [row for row in merged if (row.get('account'), row.get('platform')) not in banned]
+    """The overview page: totals, one row per channel, then every post with the most viewed first.
+
+    Posts on banned accounts are left off the page entirely; the JSON downloads still have them.
+    """
+    hidden = sum(1 for row in merged if row_is_banned(row, banned))
+    merged = live = [row for row in merged if not row_is_banned(row, banned)]
     channels = {}
     for row in merged:
         channels.setdefault((row.get('account') or '', row.get('platform') or ''), []).append(row)
@@ -218,7 +246,8 @@ def render_page(merged, attempts, checks, banned, titles, counts):
     upload_rows = ''.join(
         f'<tr><td>{cell(row.get("account"))}</td><td>{PLATFORM_NAMES.get(row.get("platform"), cell(row.get("platform")))}</td>'
         f'<td>{cell(row.get("clip_id"))}</td><td>{cell(row.get("state"))}</td><td>{link(row.get("url"))}</td></tr>'
-        for row in attempts)
+        for row in attempts
+        if not row_is_banned({**row, 'handle': post_handle(row.get('url'))}, banned))
     platforms = [p for p in PLATFORM_NAMES if any(row.get('platform') == p for row in merged)]
     filters = '<button data-platform="all" aria-pressed="true">All</button>' + ''.join(
         f'<button data-platform="{p}" aria-pressed="false">{PLATFORM_NAMES[p]}</button>' for p in platforms)
@@ -234,7 +263,7 @@ def render_page(merged, attempts, checks, banned, titles, counts):
             '<h1>Clip views</h1>'
             f'<p class="muted">Updated {now.strftime("%b %d, %H:%M")} (<span data-updated="{int(now.timestamp())}">just now</span>). '
             f'{posts} posts · {snapshots} snapshots · {measured_clips} measured clips. A dash means not measured yet, not zero.'
-            + (' Banned accounts are left out of the totals.' if banned else '') + '</p>'
+            + (f' {hidden} posts on banned accounts are hidden.' if hidden else '') + '</p>'
             f'<div class="cards">{cards}</div>'
             '<h2>By channel</h2><div class="table"><table data-sortable><thead><tr>'
             '<th data-sort>Set</th><th data-sort>Platform</th><th data-sort class="num">Posts</th>'

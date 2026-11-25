@@ -41,6 +41,10 @@ near_miss_multiplier = 2.0
 near_miss_interval_seconds = 3600
 # Live clips rendered at the same time, 1 to 4.
 render_workers = 2
+# Test: also cut the day's most-viewed Twitch viewer clips of each account set's category or
+# streamers (up to 3 per account set a day), and post them alongside chat bursts to compare views.
+# Only the window is cut from the broadcast; the viewer's clip itself is not downloaded.
+test_viewer_clips = false
 
 # Used by `gta-clips run` and the dashboard. Times are local, as HH:MM.
 # An end earlier than the start runs past midnight, e.g. 22:00 to 02:00.
@@ -61,6 +65,8 @@ ready_per_day = 6
 # Clips are offered in random order until 30 posts have their views at 24 hours; after that, in
 # order of views predicted from those stats. See data/view-model.json.
 stats_every_minutes = 60
+# Looks for new viewer clips when live.test_viewer_clips is on.
+viewer_clips_every_minutes = 60
 
 [editing]
 renderer = "ffmpeg" # Use "remotion" after installing remotion/ dependencies. Requires layout="fit".

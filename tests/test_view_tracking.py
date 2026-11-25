@@ -30,28 +30,37 @@ class TrackingExportTests(unittest.TestCase):
             self.assertEqual((data / 'state.sqlite3').read_bytes(), before)
             export_tracking(settings)
 
-    def test_banned_channels_are_marked_and_left_out_of_totals(self):
+    def test_banned_accounts_and_old_handles_are_left_off_the_page(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'data').mkdir()
             settings = root / 'browser-upload.json'
             settings.write_text('{}')
-            (root / 'config.toml').write_text('[[accounts]]\nname = "gta6-1"\nbanned = ["instagram"]\n')
+            (root / 'config.toml').write_text(
+                '[[accounts]]\nname = "gta6-1"\nbanned = ["instagram"]\n'
+                '[[accounts]]\nname = "gta6-2"\nbanned = ["instagram:@old_handle"]\n')
             db = sqlite3.connect(root / 'data' / 'state.sqlite3')
             db.executescript('''CREATE TABLE posts(platform,video_id,clip_id,account,url);
                 CREATE TABLE post_stats(platform,video_id,fetched,views,likes,comments);
                 CREATE TABLE clips(id,title);
                 INSERT INTO clips VALUES('c1','Big moment');
+                INSERT INTO clips VALUES('c2','Old handle moment');
+                INSERT INTO clips VALUES('c3','New handle moment');
                 INSERT INTO posts VALUES('instagram','abc','c1','gta6-1','');
                 INSERT INTO posts VALUES('youtube','defghij','c1','gta6-1','');
+                INSERT INTO posts VALUES('instagram','Old1','c2','gta6-2','https://www.instagram.com/old_handle/reel/Old1/');
+                INSERT INTO posts VALUES('instagram','New1','c3','gta6-2','https://www.instagram.com/new_handle/reel/New1/');
                 INSERT INTO post_stats VALUES('instagram','abc',1,5000,NULL,NULL);
+                INSERT INTO post_stats VALUES('instagram','Old1',1,4000,NULL,NULL);
+                INSERT INTO post_stats VALUES('instagram','New1',1,77,NULL,NULL);
                 INSERT INTO post_stats VALUES('youtube','defghij',1,120,3,0);''')
             db.close()
             page = (export_tracking(settings) / 'index.html').read_text(encoding='utf-8')
-            self.assertIn('Banned', page)
-            self.assertIn('Big moment', page)
-            self.assertNotIn('<b>5,000</b>', page)
+            self.assertNotIn('5,000', page)
+            self.assertNotIn('Old handle moment', page)
+            self.assertIn('New handle moment', page)
             self.assertIn('<b>120</b>', page)
+            self.assertIn('2 posts on banned accounts are hidden', page)
 
     def test_same_reel_from_publisher_and_browser_is_counted_once(self):
         from gta_clips.view_tracking import merge_same_reel

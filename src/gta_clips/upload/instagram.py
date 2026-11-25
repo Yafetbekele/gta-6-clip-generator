@@ -33,9 +33,15 @@ def window(duration: float, burst_at: float | None) -> tuple[float, float] | Non
 
 def prepare(job, path: Path, work: Path) -> Path:
     """The file to upload for ``job``: the clip itself, or a cached 30-second cut of it."""
-    duration = float(job["duration"] or 0)
     keys = job.keys()
-    burst_at = job["cut_before"] if "cut_before" in keys and job["cut_before"] is not None else None
+
+    def number(name: str) -> float:
+        return float(job[name] or 0) if name in keys else 0.0
+
+    # A trimmed clip (see trim.py) is shorter than its stream window, and its burst comes sooner.
+    duration = number("duration") - number("trimmed_s")
+    burst_at = (job["cut_before"] - number("trimmed_before_s")
+                if "cut_before" in keys and job["cut_before"] is not None else None)
     cut = window(duration, burst_at)
     if cut is None:
         return path

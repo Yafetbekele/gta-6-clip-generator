@@ -83,13 +83,16 @@ class ScheduleTests(BrowserUploadTests):
         self.assertEqual(run.call_count, 2)
         self.assertEqual([r['status'] for r in results], ['run completed'] * 2)
 
-    def test_scheduler_requires_opt_in_and_proven_upload(self):
+    def test_scheduler_requires_opt_in_but_no_test_upload(self):
         self.assertEqual(readiness(self.db,'test','youtube',{},10000), 'disabled')
         target = {'auto_post': True}
-        self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'needs successful test upload')
+        self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'ready')
         clip, = scan(self.root,'test')
         claim(self.db,'youtube','test',clip)
-        self.assertEqual(readiness(self.db,'test','youtube',target,10000), 'needs successful test upload')
+        self.db.execute('update posts set started=10000')
+        self.db.commit()
+        # A failed first attempt still waits out the spacing before retrying.
+        self.assertEqual(readiness(self.db,'test','youtube',target,13599), 'waiting for hourly interval')
         finish(self.db,'youtube','test',clip,'posted')
         self.db.execute('update posts set started=10000')
         self.db.commit()

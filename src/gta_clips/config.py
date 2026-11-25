@@ -115,6 +115,8 @@ class LiveConfig:
     render_workers: int = 2
     # Give each burst clip a random lead-in and follow-through (see cuts.py) instead of 30 s + 30 s.
     test_cuts: bool = False
+    # Also cut the day's most-viewed Twitch viewer clips (viewer_clips.py), as a test against bursts.
+    test_viewer_clips: bool = False
 
 
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -138,6 +140,8 @@ class RuntimeConfig:
     max_clips_per_account: int = 0
     # Measures clips, reads post views and refits the views model.
     stats_every_minutes: int = 60
+    # Collects viewer clips when live.test_viewer_clips is on.
+    viewer_clips_every_minutes: int = 60
 
     def watching_at(self, moment: datetime) -> bool:
         """True if ``moment`` falls in a watch window. A window past midnight belongs to its start day."""
@@ -472,6 +476,8 @@ def _live(raw: object) -> LiveConfig:
         render_workers=_integer(options.get("render_workers", defaults.render_workers),
                                 "live.render_workers", 1, 4),
         test_cuts=_boolean(options.get("test_cuts", defaults.test_cuts), "live.test_cuts"),
+        test_viewer_clips=_boolean(options.get("test_viewer_clips", defaults.test_viewer_clips),
+                                   "live.test_viewer_clips"),
     )
 
 
@@ -589,6 +595,9 @@ def _runtime(raw: object) -> RuntimeConfig:
                                        "runtime.max_clips_per_account", 0, 100000),
         stats_every_minutes=_interval(options.get("stats_every_minutes", defaults.stats_every_minutes),
                                       "runtime.stats_every_minutes"),
+        viewer_clips_every_minutes=_interval(
+            options.get("viewer_clips_every_minutes", defaults.viewer_clips_every_minutes),
+            "runtime.viewer_clips_every_minutes"),
     )
 
 

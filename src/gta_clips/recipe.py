@@ -35,6 +35,8 @@ def _switch(value: str | None, testing: bool) -> bool:
 
 def _cut(config: Config, clip: dict) -> bool:
     cut = (clip.get("cut_before"), clip.get("cut_after"))
+    if clip.get("kind") == "viewer_clip":
+        return cut == cuts.VIEWER
     if cut == (None, None):
         # VOD clips and clips from before cuts were recorded: the standard window.
         return not (config.live.test_cuts and clip.get("kind") == "burst")
@@ -51,6 +53,8 @@ EXPERIMENTS: dict[str, Rule] = {
                                                          trims.NONE),
     "editing.test_captions": lambda config, clip: _switch(clip.get("caption_style"), config.editing.test_captions),
     "live.test_cuts": _cut,
+    # Viewer clips (viewer_clips.py) are only posted while their test runs.
+    "live.test_viewer_clips": lambda config, clip: config.live.test_viewer_clips or clip.get("kind") != "viewer_clip",
 }
 
 # Ready-step columns the rules read (plus the burst's trigger kind as "kind").
@@ -68,6 +72,13 @@ def _cut_arm(config: Config, clip: dict) -> str | None:
     return f"{clip.get('cut_before')}+{clip.get('cut_after')}"
 
 
+def _source_arm(config: Config, clip: dict) -> str | None:
+    """Viewer clip vs chat burst: where the moment came from (comparison windows aren't in it)."""
+    if not config.live.test_viewer_clips:
+        return None
+    return {"viewer_clip": "viewer clip", "burst": "chat burst"}.get(clip.get("kind"))
+
+
 # Config switch -> the arm of that test a clip is in, or None when the test is off or the clip isn't
 # part of it. Picking uses these to post first whatever the tests have the least of (see need).
 ARMS: dict[str, Callable[[Config, dict], str | None]] = {
@@ -77,6 +88,7 @@ ARMS: dict[str, Callable[[Config, dict], str | None]] = {
                                                     else None),
     "editing.test_captions": lambda config, clip: clip.get("caption_style") if config.editing.test_captions else None,
     "live.test_cuts": _cut_arm,
+    "live.test_viewer_clips": _source_arm,
 }
 
 
@@ -128,5 +140,9 @@ LENGTH_FEATURES = ("clip_seconds", "cut_before", "cut_after")
 
 def blind(features: dict) -> dict:
     """``features`` with the arm a clip was given left out."""
-    return {name: (None if name in LENGTH_FEATURES else value) for name, value in features.items()
-            if not name.startswith(ARM_FEATURES)}
+    found = {name: (None if name in LENGTH_FEATURES else value) for name, value in features.items()
+             if not name.startswith(ARM_FEATURES)}
+    # The source test's arm: a viewer clip is ranked as if it were a chat burst.
+    if "kind=viewer_clip" in found:
+        found["kind=burst"] = found.pop("kind=viewer_clip")
+    return found

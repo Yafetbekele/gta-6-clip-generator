@@ -25,16 +25,20 @@ def summary(config: Config) -> list[dict]:
             entry["today"] += row["today"] or 0
         waiting = dict(db.execute("""SELECT COALESCE(account, ''), COUNT(*) FROM live_bursts
                                      WHERE state='waiting' GROUP BY 1""").fetchall())
-    feeds = {account: feed for feed in config.feeds for account in feed.accounts}
+    feeds: dict[str, list] = {}
+    for feed in config.feeds:
+        for account in feed.accounts:
+            feeds.setdefault(account, []).append(feed)
     rows = []
     for account in config.accounts:
         clips = counts.get(account.name, {"pending": 0, "approved": 0, "rejected": 0, "today": 0})
         rows.append({
-            "name": account.name, "title": account.title, "category": account.category,
+            "name": account.name, "title": account.title, "category": account.watches,
             "language": account.language, "channels": account.channels, **clips,
             "email": account.email, "destinations": dict(account.destinations),
             # Sets with the same category and language watch one shared group of channels.
-            "feed_channels": feeds[account.name].channels, "shared_with": len(feeds[account.name].accounts),
+            "feed_channels": sum(feed.channels for feed in feeds[account.name]),
+            "shared_with": len({name for feed in feeds[account.name] for name in feed.accounts}),
             "waiting": waiting.get(account.name, 0),
             "logins": {platform: token_key(platform, account.name) in logins for platform in PLATFORMS},
         })
@@ -61,8 +65,12 @@ def print_summary(config: Config):
         print(f"    {logins}")
 
 
-def _matching_feed(config: Config, category: str, language: str):
+def _matching_feed(config: Config, category: str, language: str, streamer: str = ""):
     for feed in config.feeds:
+        if feed.streamers:
+            if (streamer or "").lower() in feed.streamers:
+                return feed
+            continue
         if feed.accounts and feed.category.casefold() == (category or "").casefold() \
                 and feed.language in ("", language or ""):
             return feed
@@ -95,13 +103,13 @@ def _sort(config: Config) -> dict:
     with connect(config.paths.database) as db:
         db.execute("BEGIN IMMEDIATE")
         bursts = db.execute(
-            """SELECT b.stream_id, b.anchor, b.game_name, b.clip_id, f.language
+            """SELECT b.stream_id, b.anchor, b.game_name, b.streamer, b.clip_id, f.language
                FROM live_bursts b LEFT JOIN burst_features f USING (stream_id, anchor)
                LEFT JOIN uploads u ON u.clip_id = b.clip_id
                WHERE b.account IS NULL AND u.clip_id IS NULL
                ORDER BY b.anchor""").fetchall()
         for burst in bursts:
-            feed = _matching_feed(config, burst["game_name"], burst["language"])
+            feed = _matching_feed(config, burst["game_name"], burst["language"], burst["streamer"])
             if feed is None:
                 continue
             account = pick_account(db, config, feed.key, burst["anchor"])

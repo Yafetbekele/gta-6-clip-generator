@@ -124,8 +124,18 @@ GENERIC_TAKES = {
            ('DEBATE', 'Jogada esperta ou erro total?'),
            ('DEBATE', 'Isso foi W ou L?')),
 }
-# Kinds of hook the hook test compares (see hook_styles.py). "quote" is the normal behaviour.
-STYLES = ('quote', 'game', 'generic', 'none')
+# Hooks with no debate in them: they only ask the viewer to keep watching and claim nothing
+# about what happens, so they fit any clip.
+TEASES = {
+    'en': ('Wait for it…', 'Watch till the end', "Don't scroll yet", 'Keep watching…'),
+    'es': ('Espera…', 'Míralo hasta el final', 'No deslices todavía', 'Sigue mirando…'),
+    'pt': ('Espera…', 'Assiste até o fim', 'Não passa ainda', 'Continua assistindo…'),
+}
+# Kinds of hook (see hook_styles.py). "quote" is the normal behaviour: a debate prompt.
+# "plain" shows the clip's own words with no debate label, "tease" a keep-watching line.
+STYLES = ('quote', 'game', 'generic', 'none', 'plain', 'tease')
+# The kinds the hook test compares now: debate against no debate, and no hook box at all.
+TEST_STYLES = ('quote', 'plain', 'tease', 'none')
 
 
 def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool = True,
@@ -138,7 +148,8 @@ def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool 
 
     ``style`` is the kind of hook wanted: "quote" (the clip's words, else a game question, else
     a generic one), "game" (a game question even when a quote exists, else generic), "generic",
-    or "none" (no hook box). The returned ``method`` says what was actually made.
+    "none" (no hook box), "plain" (the clip's words with no debate label, else a tease) or
+    "tease" (a keep-watching line). The returned ``method`` says what was actually made.
     """
     if style not in STYLES:
         raise ValueError(f'Unknown hook style {style!r}')
@@ -147,7 +158,12 @@ def debate_hook(transcript: str, topic: str = '', key: str = '', *, quote: bool 
     language = language if language in QUOTE_LABELS else 'en'
     pick = zlib.crc32(key.encode('utf-8'))
     # ``quote=False`` when the speech is unreliable, such as a language Whisper was unsure of.
-    spoken = suggest_hook(transcript) if quote and style == 'quote' else ContextHook()
+    spoken = suggest_hook(transcript) if quote and style in ('quote', 'plain') else ContextHook()
+    if style == 'plain' and spoken.text:
+        return ContextHook(spoken.text, spoken.evidence, 'plain_quote_v1')
+    if style in ('plain', 'tease'):
+        teases = TEASES[language]
+        return ContextHook(teases[pick % len(teases)], '', 'tease_v1')
     if spoken.text:
         labels = QUOTE_LABELS[language]
         return ContextHook(spoken.text, spoken.evidence, 'debate_quote_v1', labels[pick % len(labels)])
