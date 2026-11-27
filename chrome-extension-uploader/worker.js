@@ -22,6 +22,20 @@ async function note(status) {
   await chrome.storage.local.set({status, updated: Date.now()});
 }
 
+async function trustedClick(tabId, point) {
+  if(!point || !Number.isFinite(point.x) || !Number.isFinite(point.y))return false;
+  const target={tabId};
+  await chrome.debugger.sendCommand(target,'Input.dispatchMouseEvent',{type:'mouseMoved',x:point.x,y:point.y});
+  await chrome.debugger.sendCommand(target,'Input.dispatchMouseEvent',{type:'mousePressed',x:point.x,y:point.y,button:'left',clickCount:1});
+  await chrome.debugger.sendCommand(target,'Input.dispatchMouseEvent',{type:'mouseReleased',x:point.x,y:point.y,button:'left',clickCount:1});
+  return true;
+}
+
+async function clickFrom(tabId, func, args=[]) {
+  const [r]=await chrome.scripting.executeScript({target:{tabId},func,args});
+  return await trustedClick(tabId,r?.result);
+}
+
 // Runs in the owned Studio tab. Deliberately supports known labels only and
 // refuses ambiguous controls instead of clicking by screen coordinates.
 async function pageAction(tabId, action, value) {
@@ -38,7 +52,8 @@ async function pageAction(tabId, action, value) {
         found = found.filter(el => !found.some(other => other !== el && el.contains(other)));
         if (found.length !== 1) return false;
         if (found[0].disabled || found[0].getAttribute('aria-disabled') === 'true') return false;
-        found[0].click(); return true;
+        const r=found[0].getBoundingClientRect();
+        return {click:{x:r.x+r.width/2,y:r.y+r.height/2}};
       };
       const identity = () => {
         const home = document.querySelector('a#home-button');
@@ -52,12 +67,8 @@ async function pageAction(tabId, action, value) {
         const editors = [...document.querySelectorAll('[contenteditable="true"][role="textbox"],input,textarea')]
           .filter(el => visible(el) && el.getAttribute('aria-label') === value.label);
         if (editors.length !== 1) return false;
-        const editor = editors[0]; editor.focus();
-        if (editor.isContentEditable) editor.textContent = value.text;
-        else editor.value = value.text;
-        editor.dispatchEvent(new InputEvent('input', {bubbles:true,inputType:'insertText',data:value.text}));
-        editor.dispatchEvent(new Event('change', {bubbles:true}));
-        return (editor.isContentEditable ? editor.textContent : editor.value) === value.text;
+        const r=editors[0].getBoundingClientRect();
+        return {edit:{x:r.x+r.width/2,y:r.y+r.height/2,text:value.text,label:value.label}};
       }
       if (action === 'checks') {
         const nodes = [...document.querySelectorAll('h1,h2,h3,ytcp-video-upload-progress,ytcp-uploads-checks,ytcp-ve,span,div')].filter(visible);
@@ -74,7 +85,20 @@ async function pageAction(tabId, action, value) {
       throw new Error('Unknown Studio action');
     }
   });
-  return result?.result;
+  const response=result?.result;
+  if(response?.click)return await trustedClick(tabId,response.click);
+  if(response?.edit) {
+    await trustedClick(tabId,response.edit);
+    await chrome.debugger.sendCommand({tabId},'Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await chrome.debugger.sendCommand({tabId},'Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await chrome.debugger.sendCommand({tabId},'Input.insertText',{text:response.edit.text});
+    const [read]=await chrome.scripting.executeScript({target:{tabId},args:[response.edit.label,response.edit.text],func:(label,expected)=>{
+      const fields=[...document.querySelectorAll('[contenteditable="true"][role="textbox"],input,textarea')].filter(e=>e.getClientRects().length&&e.getAttribute('aria-label')===label);
+      return fields.length===1&&(fields[0].isContentEditable?fields[0].textContent:fields[0].value).trim()===expected.trim();
+    }});
+    return !!read?.result;
+  }
+  return response;
 }
 
 async function until(task, label, seconds=60) {
@@ -101,31 +125,31 @@ async function selectChannel(tabId, job) {
     // accounts; /channel_switcher alone lists only the current Google account.
     await chrome.tabs.update(tabId,{url:'https://www.youtube.com/account'});
     await until(async()=>{
-      const [r]=await chrome.scripting.executeScript({target:{tabId},func:()=>{
+      return await clickFrom(tabId,()=>{
         const avatar=document.querySelector('#avatar-btn');
         if(!avatar?.getClientRects().length)return false;
-        avatar.click();return true;
-      }});return r?.result;
+        const r=avatar.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      });
     },'YouTube account menu');
     await until(async()=>{
-      const [r]=await chrome.scripting.executeScript({target:{tabId},func:()=>{
+      return await clickFrom(tabId,()=>{
         const links=[...document.querySelectorAll('a')].filter(el=>el.getClientRects().length&&(el.innerText||'').trim()==='Switch account');
-        if(links.length!==1)return false;links[0].click();return true;
-      }});return r?.result;
+        if(links.length!==1)return false;const r=links[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      });
     },'Switch account menu');
     await until(async()=>{
-      const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_label],func:(label)=>{
+      return await clickFrom(tabId,(label)=>{
         const cards=[...document.querySelectorAll('ytd-account-item-renderer')].filter(el=>el.getClientRects().length);
         const matches=cards.filter(el=>(el.innerText||'').split('\n').some(line=>line.trim()===label));
         if(matches.length!==1)return false;
         const option=matches[0].querySelector('[role="option"]');
         if(!option||option.getAttribute('aria-disabled')==='true')return false;
-        option.click();return true;
-      }});return r?.result;
+        const r=option.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      },[job.channel_label]);
     },'exact signed-in channel name',45);
     await until(async()=>{
       const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_id],func:expected=>
-        [...document.querySelectorAll('a')].some(a=>a.href==='https://www.youtube.com/channel/'+expected||a.href==='https://www.youtube.com/channel/'+expected+'/')
+        [...document.querySelectorAll('a')].some(a=>a.getClientRects().length&&(a.getAttribute('aria-label')==='Your channel'||a.closest('#channel-info'))&&(a.href==='https://www.youtube.com/channel/'+expected||a.href==='https://www.youtube.com/channel/'+expected+'/'))
       });return r?.result;
     },'selected YouTube channel identity',45);
     await chrome.tabs.update(tabId,{url:'https://studio.youtube.com/channel/'+job.channel_id});
@@ -137,14 +161,14 @@ async function selectChannel(tabId, job) {
   if (job.channel_handle) {
     await chrome.tabs.update(tabId,{url:'https://www.youtube.com/channel_switcher?next='+encodeURIComponent('https://studio.youtube.com/channel/'+job.channel_id)});
     await until(async()=>{
-      const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_handle],func:(handle)=>{
+      return await clickFrom(tabId,(handle)=>{
         const cards=[...document.querySelectorAll('ytd-account-item-renderer')].filter(el=>el.getClientRects().length);
         const exact=cards.filter(el=>(el.innerText||'').split('\n').some(line=>line.trim().toLowerCase()===handle.toLowerCase()));
         if(exact.length!==1)return false;
         const option=exact[0].querySelector('[role="option"]');
         if(!option||option.getAttribute('aria-disabled')==='true')return false;
-        option.click();return true;
-      }});return r?.result;
+        const r=option.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      },[job.channel_handle]);
     },'signed-in channel picker',45);
   }
   await identity(tabId,job.channel_id);
@@ -155,20 +179,19 @@ async function upload(job) {
   let attached = false, posted = false, heartbeat;
   try {
     await chrome.storage.local.set({activeJob: job.id, activeTab: tab.id});
-    await selectChannel(tab.id, job);
     // Active debugger sessions keep the service worker alive through long uploads.
     await chrome.debugger.attach({tabId:tab.id}, '1.3'); attached = true;
     heartbeat = setInterval(() => api('/event', {job_id:job.id,event:'heartbeat'}).catch(() => {}), 20000);
+    await selectChannel(tab.id, job);
     await until(() => pageAction(tab.id,'click',['Create']), 'Create');
     // Upload videos is a menu item rather than a normal button in some layouts.
     await until(async () => {
-      const [r] = await chrome.scripting.executeScript({target:{tabId:tab.id},func:() => {
-        const nodes=[...document.querySelectorAll('[role="menuitem"],ytcp-ve,yt-formatted-string')]
-          .filter(el => el.getClientRects().length && el.textContent.trim()==='Upload videos');
-        const leaf=nodes.filter(el=>!nodes.some(x=>x!==el&&el.contains(x)));
-        if(leaf.length!==1) return false;
-        leaf[0].click();return true;
-      }}); return r?.result;
+      return await clickFrom(tab.id,() => {
+        const nodes=[...document.querySelectorAll('[role="menuitem"][test-id="upload"]')]
+          .filter(el => el.getClientRects().length && (el.innerText||el.textContent).trim()==='Upload videos');
+        if(nodes.length!==1)return false;
+        const r=nodes[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+      });
     }, 'Upload videos');
     await until(() => pageAction(tab.id,'fileReady'), 'file picker');
     await identity(tab.id, job.channel_id);
