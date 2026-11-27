@@ -31,6 +31,16 @@ The computer must remain awake with Chrome running. There are no AI calls.
    scheduled upload batch to finish by refusing if it still owns its lock.
 8. Click **Start automatic posting** in the extension popup. This is the action
    that allows public posting. Installing or pairing alone never posts.
+   You can arm the extension before activation: it will wait without uploading
+   until the local queue takes over from the old scheduler.
+
+For an explicitly requested one-per-account test, prepare the queue with
+`Queue(Path('browser-upload.json')).begin_test()` from `gta_clips.chrome_bridge`
+before activation. Each configured account receives at most one test attempt.
+Missing clips, quota limits and login problems are reported; they are not
+bypassed. Once the batch ends, the queue stays in test mode and does not start
+regular posting. Results appear in the popup and `chrome_test_accounts` in the
+existing browser ledger.
 
 ## Multiple accounts
 

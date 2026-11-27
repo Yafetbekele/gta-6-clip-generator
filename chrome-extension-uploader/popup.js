@@ -5,6 +5,7 @@ async function refresh() {
   const result=await chrome.runtime.sendMessage({type:'status'});
   if(result.error) {status.textContent=result.error;return;}
   status.textContent=(local.enabled?'Posting ON':'Posting OFF')+'\nTransport: '+result.mode+'\n'+(local.status||'Connected');
+  if(result.test_accounts)status.textContent+='\n\nTEST RUN\n'+result.test_accounts.map(a=>a.account+': '+a.state+(a.detail?' — '+a.detail:'')).join('\n');
   const attention=document.getElementById('attention');attention.replaceChildren();
   for(const item of result.attention||[]) {
     const p=document.createElement('p');p.textContent=item.account+': '+item.detail;
@@ -20,7 +21,7 @@ document.getElementById('pair').onclick=async()=>{
 };
 document.getElementById('start').onclick=async()=>{
   const result=await chrome.runtime.sendMessage({type:'status'});
-  if(result.error||result.mode!=='normal_chrome_extension'){status.textContent=result.error||'Activate the replacement queue first.';return;}
+  if(result.error){status.textContent=result.error;return;}
   await chrome.storage.local.set({enabled:true});await chrome.runtime.sendMessage({type:'tick'});await refresh();
 };
 document.getElementById('stop').onclick=async()=>{await chrome.storage.local.set({enabled:false});await refresh();};

@@ -57,6 +57,19 @@ class QueueTests(unittest.TestCase):
         self.cfg.pop('youtube_transport'); self.write_config()
         self.assertIsNone(self.job())
 
+    def test_test_run_stops_after_one_post_even_after_spacing_elapses(self):
+        self.queue.begin_test()
+        job=self.job();self.event(job,'start');self.event(job,'posted',url='https://youtube.com/shorts/abc123')
+        other=self.video.with_name('1300 second.mp4');other.write_bytes(b'other video')
+        other.with_suffix('.txt').write_text(NOTE.replace('clip-1','clip-2'))
+        self.assertIsNone(self.job(now=200000))
+        self.assertEqual(self.queue.status()['test_accounts'][0]['state'],'posted')
+
+    def test_test_run_reports_missing_clips_without_later_surprise_posts(self):
+        self.queue.begin_test();self.video.unlink()
+        self.assertIsNone(self.job())
+        self.assertEqual(self.queue.status()['test_accounts'][0]['state'],'skipped')
+
     def test_channel_handle_binding_only_accepts_configured_channel(self):
         self.queue.bind({'channel_id':CHANNEL,'handle':'@mychannel'})
         self.assertEqual(self.job()['channel_handle'],'@mychannel')

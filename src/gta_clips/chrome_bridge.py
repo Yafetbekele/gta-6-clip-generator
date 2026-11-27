@@ -41,6 +41,13 @@ class Queue:
                     account TEXT PRIMARY KEY, detail TEXT, checked REAL);
                 CREATE TABLE IF NOT EXISTS chrome_channel_bindings (
                     channel_id TEXT PRIMARY KEY, handle TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS chrome_test_runs (
+                    id TEXT PRIMARY KEY, started REAL, active INTEGER);
+                CREATE TABLE IF NOT EXISTS chrome_test_accounts (
+                    run_id TEXT, account TEXT, state TEXT, detail TEXT,
+                    PRIMARY KEY(run_id,account));
+                CREATE TABLE IF NOT EXISTS chrome_test_jobs (
+                    job_id TEXT PRIMARY KEY, run_id TEXT, account TEXT);
             ''')
 
     def config(self):
@@ -59,9 +66,12 @@ class Queue:
         with self.db() as db:
             active = db.execute("SELECT account,state,expires FROM chrome_jobs WHERE state IN ('reserved','uploading') AND expires>?", (time.time(),)).fetchone()
             pauses = [dict(r) for r in db.execute("SELECT * FROM chrome_attention ORDER BY account")]
+            test = db.execute("SELECT id FROM chrome_test_runs WHERE active=1 ORDER BY started DESC LIMIT 1").fetchone()
+            tests = [dict(r) for r in db.execute("SELECT account,state,detail FROM chrome_test_accounts WHERE run_id=? ORDER BY account", (test[0],))] if test else None
         config = self.config()
         return {"mode": config.get("youtube_transport", "legacy"),
                 "active": dict(active) if active else None, "attention": pauses,
+                "test_accounts": tests,
                 "accounts": [{"account": a, "channel_id": t["youtube"].get("channel_id", ""),
                               "enabled": t["youtube"].get("auto_post") is True}
                              for a, t in config["accounts"].items() if "youtube" in t]}
@@ -75,15 +85,21 @@ class Queue:
             db.execute("BEGIN IMMEDIATE")
             # Expired uploads stay held in the old ledger: never retry an uncertain post.
             db.execute("UPDATE chrome_jobs SET state='expired',detail='Inspect Studio before retrying' WHERE state IN ('reserved','uploading') AND expires<=?", (now,))
+            db.execute("UPDATE chrome_test_accounts SET state='held',detail='Test lease expired; inspect Studio' WHERE (run_id,account) IN (SELECT t.run_id,t.account FROM chrome_test_jobs t JOIN chrome_jobs j ON j.id=t.job_id WHERE j.state='expired') AND state IN ('reserved','uploading')")
             if db.execute("SELECT 1 FROM chrome_jobs WHERE state IN ('reserved','uploading')").fetchone():
                 return {"job": None, "reason": "An upload is already in progress"}
+            test = db.execute("SELECT id FROM chrome_test_runs WHERE active=1 ORDER BY started DESC LIMIT 1").fetchone()
             # Least recently attempted first, rather than always starting with GTA1.
             candidates = []
             for account, targets in config["accounts"].items():
+                if test and not db.execute("SELECT 1 FROM chrome_test_accounts WHERE run_id=? AND account=? AND state='pending'", (test[0],account)).fetchone():
+                    continue
                 target = targets.get("youtube", {})
                 if target.get("auto_post") is not True or not re.fullmatch(r"UC[\w-]{22}", target.get("channel_id", "")):
+                    if test:self._test_skip(db,test[0],account,"Posting disabled or channel missing")
                     continue
                 if account_block(db, "youtube", account, target) or db.execute("SELECT 1 FROM chrome_attention WHERE account=?", (account,)).fetchone():
+                    if test:self._test_skip(db,test[0],account,"Account needs manual attention")
                     continue
                 latest = db.execute("SELECT MAX(started) FROM posts WHERE platform='youtube' AND account=?", (account,)).fetchone()[0]
                 limit = target.get("daily_limit", 3)
@@ -91,6 +107,8 @@ class Queue:
                 spacing = posting_spacing(account, "youtube", target, latest or 0)
                 if allowed(db, "youtube", account, limit, spacing, now):
                     candidates.append((latest or 0, account, target))
+                elif test:
+                    self._test_skip(db,test[0],account,"Daily limit or posting interval; limit preserved")
             root = (self.settings.parent / config["ready_folder"]).resolve()
             for _, account, target in sorted(candidates, key=lambda r: (r[0], r[1])):
                 for clip in scan(root, account):
@@ -106,7 +124,13 @@ class Queue:
                     db.execute("INSERT INTO chrome_jobs VALUES(?,?,?,?,?,?,?,?,?)",
                                (payload["id"], account, clip.clip_id, clip.digest,
                                 json.dumps(payload), "reserved", now, now + LEASE_SECONDS, ""))
+                    if test:
+                        db.execute("INSERT INTO chrome_test_jobs VALUES(?,?,?)",(payload["id"],test[0],account))
+                        db.execute("UPDATE chrome_test_accounts SET state='reserved' WHERE run_id=? AND account=?",(test[0],account))
                     return {"job": payload}
+                if test:self._test_skip(db,test[0],account,"No unposted ready clips")
+            if test:
+                return {"job":None,"reason":"One-per-account test finished; inspect the test results before enabling regular posting"}
         return {"job": None, "reason": "Waiting for clips, posting interval, login attention or daily quota"}
 
     def event(self, data, now=None):
@@ -157,7 +181,28 @@ class Queue:
                 if row["state"] == "uploading":
                     db.execute("UPDATE posts SET finished=?,detail=? WHERE platform='youtube' AND account=? AND clip_id=?", (now, detail, row["account"], row["clip_id"]))
             db.execute("UPDATE chrome_jobs SET expires=? WHERE id=?", (now + LEASE_SECONDS, row["id"]))
+            if action != 'heartbeat':
+                state = {'start':'uploading','posted':'posted','failed':'held'}[action]
+                db.execute("UPDATE chrome_test_accounts SET state=?,detail=? WHERE (run_id,account) IN (SELECT run_id,account FROM chrome_test_jobs WHERE job_id=?)",(state,str(data.get('detail',data.get('url','')))[:300],row['id']))
         return {"ok": True}
+
+    @staticmethod
+    def _test_skip(db,run,account,reason):
+        db.execute("UPDATE chrome_test_accounts SET state='skipped',detail=? WHERE run_id=? AND account=? AND state='pending'",(reason,run,account))
+
+    def begin_test(self):
+        config=self.config()
+        run=secrets.token_urlsafe(16)
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM chrome_jobs WHERE state IN ('reserved','uploading') AND expires>?",(time.time(),)).fetchone():
+                raise ValueError('Wait for the current upload before starting a new test')
+            db.execute('UPDATE chrome_test_runs SET active=0')
+            db.execute('INSERT INTO chrome_test_runs VALUES(?,?,1)',(run,time.time()))
+            for account,targets in config['accounts'].items():
+                if re.fullmatch(r'UC[\w-]{22}',targets.get('youtube',{}).get('channel_id','')):
+                    db.execute("INSERT INTO chrome_test_accounts VALUES(?,?,'pending','')",(run,account))
+        return run
 
     def bind(self, data):
         channel = data.get("channel_id", "")
