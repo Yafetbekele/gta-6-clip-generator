@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Clip uploader</title>
+<style>body{width:350px;font:14px system-ui;padding:16px;background:#10131a;color:#eef2ff}h1{font-size:20px}input,button{box-sizing:border-box;width:100%;padding:9px;margin:5px 0}button{cursor:pointer}pre{white-space:pre-wrap;font:12px system-ui}small{color:#b6c0d5}</style>
+<h1>YouTube clip uploader</h1>
+<p>Uses this Chrome profile. One upload at a time. Maximum three per account per rolling 24 hours.</p>
+<label>Local queue pairing key<input id="token" type="password" autocomplete="off"></label>
+<button id="pair">Pair and check connection</button>
+<label>Current Studio channel’s public handle<input id="handle" placeholder="@mychannel" autocomplete="off"></label>
+<button id="bind">Save handle for this Studio channel</button>
+<button id="start">Start automatic posting</button>
+<button id="stop">Stop posting</button>
+<button id="recover" hidden>I inspected the interrupted upload</button>
+<small>Keep Chrome and the local queue running. Failed or uncertain posts remain paused for review.</small>
+<pre id="status">Not connected</pre>
+<div id="attention"></div>
+<script src="popup.js"></script></html>

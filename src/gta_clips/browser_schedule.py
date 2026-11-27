@@ -85,6 +85,10 @@ def tick(path, dry_run=False):
                     if platform not in targets:
                         continue
                     target = targets[platform]
+                    if platform == 'youtube' and config.get('youtube_transport') == 'normal_chrome_extension':
+                        results.append({'account': account, 'platform': platform,
+                                        'status': 'handled by normal Chrome extension'})
+                        continue
                     status = readiness(db, account, platform, target, time.time())
                     if status == 'ready':
                         try:

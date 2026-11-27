@@ -461,6 +461,9 @@ def main(argv=None):
     try:
         config, target = settings(args.settings, args.account, args.platform,
                                   require_identity=args.action != "login")
+        if (args.action == "run" and args.platform == "youtube"
+                and config.get("youtube_transport") == "normal_chrome_extension"):
+            raise ValueError("YouTube posting is handled by the normal Chrome extension; use its popup")
         base = args.settings.resolve().parent
         state = (base / config.get("state_dir", "data/browser-upload")).resolve()
         root = (base / config["ready_folder"]).resolve()
