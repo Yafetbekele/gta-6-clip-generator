@@ -175,7 +175,9 @@ async function selectChannel(tabId, job) {
 }
 
 async function upload(job) {
-  const tab = await chrome.tabs.create({url: 'https://studio.youtube.com/channel/' + job.channel_id, active:false});
+  // YouTube defers menu hydration in background tabs. Use an owned foreground
+  // tab for interactive uploads; leave every pre-existing tab untouched.
+  const tab = await chrome.tabs.create({url: 'https://studio.youtube.com/channel/' + job.channel_id, active:true});
   let attached = false, posted = false, heartbeat;
   try {
     await chrome.storage.local.set({activeJob: job.id, activeTab: tab.id});
