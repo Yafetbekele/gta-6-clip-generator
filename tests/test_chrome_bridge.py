@@ -75,6 +75,12 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.job()['channel_handle'],'@mychannel')
         with self.assertRaises(ValueError):self.queue.bind({'channel_id':'UC'+'b'*22,'handle':'@wrong'})
 
+    def test_cross_google_account_label_is_bound_to_exact_channel_id(self):
+        self.queue.bind({'channel_id':CHANNEL,'label':'Best_Jynxzi_clips'})
+        job=self.job()
+        self.assertEqual(job['channel_label'],'Best_Jynxzi_clips')
+        self.assertEqual(job['channel_id'],CHANNEL)
+
     def test_only_one_job_and_ready_folder_ownership(self):
         job = self.job()
         self.assertEqual(job['account'], 'first')

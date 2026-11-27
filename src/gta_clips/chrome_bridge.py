@@ -49,6 +49,8 @@ class Queue:
                 CREATE TABLE IF NOT EXISTS chrome_test_jobs (
                     job_id TEXT PRIMARY KEY, run_id TEXT, account TEXT);
             ''')
+            if 'label' not in {r[1] for r in db.execute('PRAGMA table_info(chrome_channel_bindings)')}:
+                db.execute('ALTER TABLE chrome_channel_bindings ADD COLUMN label TEXT')
 
     def config(self):
         return json.loads(self.settings.read_text(encoding="utf-8-sig"))
@@ -119,8 +121,9 @@ class Queue:
                     payload = {"id": secrets.token_urlsafe(24), "account": account,
                                "channel_id": target["channel_id"], "clip_id": clip.clip_id,
                                "file": str(clip.file), "title": clip.title, "description": clip.description}
-                    binding = db.execute("SELECT handle FROM chrome_channel_bindings WHERE channel_id=?", (target["channel_id"],)).fetchone()
+                    binding = db.execute("SELECT handle,label FROM chrome_channel_bindings WHERE channel_id=?", (target["channel_id"],)).fetchone()
                     payload["channel_handle"] = binding[0] if binding else None
+                    payload["channel_label"] = binding[1] if binding else None
                     db.execute("INSERT INTO chrome_jobs VALUES(?,?,?,?,?,?,?,?,?)",
                                (payload["id"], account, clip.clip_id, clip.digest,
                                 json.dumps(payload), "reserved", now, now + LEASE_SECONDS, ""))
@@ -207,11 +210,12 @@ class Queue:
     def bind(self, data):
         channel = data.get("channel_id", "")
         handle = data.get("handle", "").lstrip("@").strip()
+        label = str(data.get('label','')).strip()
         configured = [t.get("youtube", {}).get("channel_id") for t in self.config()["accounts"].values()]
-        if channel not in configured or not re.fullmatch(r"[A-Za-z0-9_.-]{3,100}", handle):
+        if channel not in configured or not (re.fullmatch(r"[A-Za-z0-9_.-]{3,100}", handle) or (0<len(label)<=100 and not any(ord(c)<32 for c in label))):
             raise ValueError("Use a configured Studio channel and its exact public @handle")
         with self.db() as db:
-            db.execute("INSERT OR REPLACE INTO chrome_channel_bindings VALUES(?,?)", (channel, "@" + handle))
+            db.execute("INSERT OR REPLACE INTO chrome_channel_bindings(channel_id,handle,label) VALUES(?,?,?)", (channel, "@" + handle if handle else '',label or None))
         return {"ok": True}
 
 

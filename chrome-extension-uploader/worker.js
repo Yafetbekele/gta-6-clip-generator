@@ -96,6 +96,42 @@ async function identity(tabId, expected) {
 }
 
 async function selectChannel(tabId, job) {
+  if (job.channel_label) {
+    // The full account menu includes channels under other signed-in Google
+    // accounts; /channel_switcher alone lists only the current Google account.
+    await chrome.tabs.update(tabId,{url:'https://www.youtube.com/account'});
+    await until(async()=>{
+      const [r]=await chrome.scripting.executeScript({target:{tabId},func:()=>{
+        const avatar=document.querySelector('#avatar-btn');
+        if(!avatar?.getClientRects().length)return false;
+        avatar.click();return true;
+      }});return r?.result;
+    },'YouTube account menu');
+    await until(async()=>{
+      const [r]=await chrome.scripting.executeScript({target:{tabId},func:()=>{
+        const links=[...document.querySelectorAll('a')].filter(el=>el.getClientRects().length&&(el.innerText||'').trim()==='Switch account');
+        if(links.length!==1)return false;links[0].click();return true;
+      }});return r?.result;
+    },'Switch account menu');
+    await until(async()=>{
+      const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_label],func:(label)=>{
+        const cards=[...document.querySelectorAll('ytd-account-item-renderer')].filter(el=>el.getClientRects().length);
+        const matches=cards.filter(el=>(el.innerText||'').split('\n').some(line=>line.trim()===label));
+        if(matches.length!==1)return false;
+        const option=matches[0].querySelector('[role="option"]');
+        if(!option||option.getAttribute('aria-disabled')==='true')return false;
+        option.click();return true;
+      }});return r?.result;
+    },'exact signed-in channel name',45);
+    await until(async()=>{
+      const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_id],func:expected=>
+        [...document.querySelectorAll('a')].some(a=>a.href==='https://www.youtube.com/channel/'+expected||a.href==='https://www.youtube.com/channel/'+expected+'/')
+      });return r?.result;
+    },'selected YouTube channel identity',45);
+    await chrome.tabs.update(tabId,{url:'https://studio.youtube.com/channel/'+job.channel_id});
+    await identity(tabId,job.channel_id);
+    return;
+  }
   // A saved handle selects a channel in the ordinary picker, but never proves
   // identity: the exact Studio channel ID is still checked after selection.
   if (job.channel_handle) {
