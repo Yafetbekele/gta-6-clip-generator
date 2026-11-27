@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Twitch Clips — Normal Chrome Uploader",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minimum_chrome_version": "118",
   "description": "Post your local reviewed YouTube clip queue in your signed-in Chrome profile.",
   "permissions": ["alarms", "storage", "scripting", "debugger"],

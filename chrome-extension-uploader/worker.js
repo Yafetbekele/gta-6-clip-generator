@@ -52,6 +52,7 @@ async function pageAction(tabId, action, value) {
         found = found.filter(el => !found.some(other => other !== el && el.contains(other)));
         if (found.length !== 1) return false;
         if (found[0].disabled || found[0].getAttribute('aria-disabled') === 'true') return false;
+        found[0].scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=found[0].getBoundingClientRect();
         return {click:{x:r.x+r.width/2,y:r.y+r.height/2}};
       };
@@ -67,6 +68,7 @@ async function pageAction(tabId, action, value) {
         const editors = [...document.querySelectorAll('[contenteditable="true"][role="textbox"],input,textarea')]
           .filter(el => visible(el) && el.getAttribute('aria-label') === value.label);
         if (editors.length !== 1) return false;
+        editors[0].scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=editors[0].getBoundingClientRect();
         return {edit:{x:r.x+r.width/2,y:r.y+r.height/2,text:value.text,label:value.label}};
       }
@@ -128,13 +130,14 @@ async function selectChannel(tabId, job) {
       return await clickFrom(tabId,()=>{
         const avatar=document.querySelector('#avatar-btn');
         if(!avatar?.getClientRects().length)return false;
+        avatar.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=avatar.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       });
     },'YouTube account menu');
     await until(async()=>{
       return await clickFrom(tabId,()=>{
         const links=[...document.querySelectorAll('a')].filter(el=>el.getClientRects().length&&(el.innerText||'').trim()==='Switch account');
-        if(links.length!==1)return false;const r=links[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
+        if(links.length!==1)return false;links[0].scrollIntoView({block:'center',inline:'center',behavior:'instant'});const r=links[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       });
     },'Switch account menu');
     await until(async()=>{
@@ -144,6 +147,7 @@ async function selectChannel(tabId, job) {
         if(matches.length!==1)return false;
         const option=matches[0].querySelector('[role="option"]');
         if(!option||option.getAttribute('aria-disabled')==='true')return false;
+        option.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=option.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       },[job.channel_label]);
     },'exact signed-in channel name',45);
@@ -167,6 +171,7 @@ async function selectChannel(tabId, job) {
         if(exact.length!==1)return false;
         const option=exact[0].querySelector('[role="option"]');
         if(!option||option.getAttribute('aria-disabled')==='true')return false;
+        option.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=option.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       },[job.channel_handle]);
     },'signed-in channel picker',45);
@@ -192,6 +197,7 @@ async function upload(job) {
         const nodes=[...document.querySelectorAll('[role="menuitem"][test-id="upload"]')]
           .filter(el => el.getClientRects().length && (el.innerText||el.textContent).trim()==='Upload videos');
         if(nodes.length!==1)return false;
+        nodes[0].scrollIntoView({block:'center',inline:'center',behavior:'instant'});
         const r=nodes[0].getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       });
     }, 'Upload videos');

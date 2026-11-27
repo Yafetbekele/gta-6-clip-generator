@@ -8,7 +8,7 @@ const noop={addListener(){}};
 function element(label,extra={}) {
   return {innerText:label,textContent:label,children:[],disabled:false,
     getClientRects:()=>[{}], getBoundingClientRect:()=>({x:10,y:20,width:100,height:40}),
-    getAttribute:name=>name==='aria-label'?label:null,contains:()=>false,hasAttribute:()=>false,
+    getAttribute:name=>name==='aria-label'?label:null,contains:()=>false,hasAttribute:()=>false,scrollIntoView(){},
     click(){throw new Error('Synthetic DOM click must not be used');},...extra};
 }
 const document={querySelectorAll:()=>elements,querySelector:()=>home};
@@ -30,6 +30,12 @@ vm.runInContext(source+'\nglobalThis.subject={pageAction,identity};',context);
   assert(calls.every(x=>x.target.tabId===7));
   assert.equal(calls[1].args.x,60);assert.equal(calls[1].args.y,40);
   console.log('PASS real mouse input targets the exact tab and control');
+
+  let box={x:10,y:1560,width:100,height:40},scrolled=false;
+  elements=[element('Publish',{getBoundingClientRect:()=>box,scrollIntoView(){scrolled=true;box={...box,y:20};}})];calls.length=0;
+  assert.equal(await context.subject.pageAction(7,'click',['Publish']),true);
+  assert(scrolled);assert.equal(calls[1].args.y,40);
+  console.log('PASS offscreen controls are scrolled into view before mouse coordinates are calculated');
 
   elements=[element('Publish'),element('Publish')];calls.length=0;
   assert.equal(await context.subject.pageAction(7,'click',['Publish']),false);
