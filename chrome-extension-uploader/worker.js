@@ -121,6 +121,23 @@ async function identity(tabId, expected) {
   }, 'channel verification', 45);
 }
 
+async function youtubeIdentity(tabId,expected) {
+  const [r]=await chrome.scripting.executeScript({target:{tabId},args:[expected],func:expected=>
+    [...document.querySelectorAll('a')].some(a=>{
+      if(!a.getClientRects().length || !(a.getAttribute('aria-label')==='Your channel'||a.closest('#channel-info')))return false;
+      try {
+        const url=new URL(a.href);
+        // YouTube sometimes renders its own channel link with http:// even
+        // inside the HTTPS account page. Read its host and ID; never follow it.
+        return ['youtube.com','www.youtube.com'].includes(url.hostname) &&
+          ['http:','https:'].includes(url.protocol) &&
+          url.pathname.replace(/\/$/,'')==='/channel/'+expected;
+      } catch {return false;}
+    })
+  });
+  return !!r?.result;
+}
+
 async function selectChannel(tabId, job) {
   if (job.channel_label) {
     // The full account menu includes channels under other signed-in Google
@@ -151,11 +168,7 @@ async function selectChannel(tabId, job) {
         const r=option.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};
       },[job.channel_label]);
     },'exact signed-in channel name',45);
-    await until(async()=>{
-      const [r]=await chrome.scripting.executeScript({target:{tabId},args:[job.channel_id],func:expected=>
-        [...document.querySelectorAll('a')].some(a=>a.getClientRects().length&&(a.getAttribute('aria-label')==='Your channel'||a.closest('#channel-info'))&&(a.href==='https://www.youtube.com/channel/'+expected||a.href==='https://www.youtube.com/channel/'+expected+'/'))
-      });return r?.result;
-    },'selected YouTube channel identity',45);
+    await until(()=>youtubeIdentity(tabId,job.channel_id),'selected YouTube channel identity',45);
     await chrome.tabs.update(tabId,{url:'https://studio.youtube.com/channel/'+job.channel_id});
     await identity(tabId,job.channel_id);
     return;

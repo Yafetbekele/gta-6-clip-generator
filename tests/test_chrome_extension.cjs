@@ -22,7 +22,7 @@ const chrome={
 };
 const context=vm.createContext({chrome,document,getComputedStyle:()=>({visibility:'visible'}),
   setTimeout,clearTimeout,setInterval,clearInterval,AbortSignal,URL,console});
-vm.runInContext(source+'\nglobalThis.subject={pageAction,identity};',context);
+vm.runInContext(source+'\nglobalThis.subject={pageAction,identity,youtubeIdentity};',context);
 (async()=>{
   elements=[element('Publish')];calls.length=0;
   assert.equal(await context.subject.pageAction(7,'click',['Publish']),true);
@@ -52,4 +52,15 @@ vm.runInContext(source+'\nglobalThis.subject={pageAction,identity};',context);
   await assert.rejects(context.subject.identity(7,'UC'+'a'.repeat(22)),/Wrong channel/);
   assert.equal(calls.length,0);
   console.log('PASS wrong channel fails before any mouse or file input');
+
+  const expected='UC'+'a'.repeat(22);
+  for(const scheme of ['http','https']) {
+    elements=[element('Your channel',{href:scheme+'://www.youtube.com/channel/'+expected})];
+    assert.equal(await context.subject.youtubeIdentity(7,expected),true);
+  }
+  elements=[element('Your channel',{href:'https://evil.example/channel/'+expected})];
+  assert.equal(await context.subject.youtubeIdentity(7,expected),false);
+  elements=[element('Your channel',{href:'https://www.youtube.com/channel/UC'+'b'.repeat(22)})];
+  assert.equal(await context.subject.youtubeIdentity(7,expected),false);
+  console.log('PASS YouTube channel identity accepts its HTTP/HTTPS links but rejects wrong hosts and IDs');
 })().catch(e=>{console.error(e);process.exitCode=1;});
